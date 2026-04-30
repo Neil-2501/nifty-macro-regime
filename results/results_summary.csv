@@ -1,1 +1,8 @@
-metric,strategy,nifty_buy_hold
+metric,strategy_net_3bps,nifty_buy_hold
+cumulative_return_pct,467.2,451.9
+cagr_pct,9.91,9.74
+sharpe,0.33,0.27
+sortino,0.36,0.25
+max_drawdown_pct,-22.2,-51.7
+calmar,0.45,0.19
+ann_vol_pct,13.26,19.27
