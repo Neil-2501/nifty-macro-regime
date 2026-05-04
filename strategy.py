@@ -1,589 +1,532 @@
 """
-Modular Macro Strategy Framework — Indian Markets (v1)
-Signals → Score → Regime Filter → Position → NIFTY PnL
+Modular Macro Strategy Framework — Indian Markets (canonical, v1.1)
 
-Signal architecture:
-  Entry  : INR strengthening + VIX falling  → bullish, go long
-  Exit   : SupplyShockSignal (oil + INR + VIX all agree bearish) → go flat
-  Regime : DMA filter as final override
+Production config: Config 2 — gold rotation during stress flat, panic-short
+retained for COVID-style regimes, RBI repo rate cash yield on fully-flat days.
 
-Modes:
-  long_only=True,  buy_hold_sell=False  →  +1 or 0 (flat when no signal)
-  long_only=True,  buy_hold_sell=True   →  +1 or 0 (hold position when neutral)
-  long_only=False, buy_hold_sell=False  →  +1, -1, or 0
-  long_only=False, buy_hold_sell=True   →  +1, -1, or 0 (hold when neutral)
+Two other configs are run for comparison:
+  Config 1 — no gold rotation (cash on every flat day, panic-short retained)
+  Config 3 — gold replaces panic short (rotation instead of active short)
+
+Architecture:
+  - Three-lane signal combiner (entry / exit / short) with regime-filter gate
+  - Dual-asset positions: nifty_position + gold_position emitted by combiner
+  - Per-asset transaction costs (NIFTY 3 bps, gold 5 bps, cash sweep 0 bps)
+  - Time-varying RBI repo rate credited on fully-flat days (sourced from
+    RBI MPC press releases, hardcoded as RBI_REPO_RATE_HISTORY step function)
+  - Gold instrument: GOLDBEES.NS (NSE-listed gold ETF, INR-denominated).
+    Series begins 2009-01-02; pre-2009 stress-flat days remain in cash.
+
+v1.0 (no gold, no cash yield) is preserved in git history at commit c2860fc.
 """
 
+import sys
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-
 # ---------------------------------------------------------------------------
-# Base Signal Interface
+# Signal classes — replicated from strategy.py (no logic changes)
 # ---------------------------------------------------------------------------
 
 class MacroSignal:
-    """
-    Base class for all macro signals.
-    Subclasses must implement `compute(data) -> pd.Series` returning values
-    in [-1, 0, +1]: +1 long, -1 short/exit, 0 no view.
-    """
-    name: str = "base"
-
-    def compute(self, data: pd.DataFrame) -> pd.Series:
-        raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
-# Signals
-# ---------------------------------------------------------------------------
+    name = "base"
+    def compute(self, data): raise NotImplementedError
 
 class SupplyShockSignal(MacroSignal):
-    """
-    Detects supply shock regimes by requiring ALL THREE indicators to agree:
-      - Crude oil (CL=F)  rising  > oil_threshold  over window days
-      - USD/INR  (INR=X)  rising  > inr_threshold  over window days (rupee weakening)
-      - India VIX (^INDIAVIX) rising > vix_threshold over window days (fear spiking)
-
-    When all three align it is NOT a global risk-on move (where oil rises with
-    NIFTY) — it is a supply shock: oil up because of disruption, fear up, rupee
-    under pressure. This is the cleanest bearish signal for India.
-
-    Returns:
-      -1  when all three are bearish simultaneously  → exit / short
-       0  otherwise                                  → no view from this signal
-    """
     name = "supply_shock"
-
-    def __init__(
-        self,
-        window: int = 10,
-        oil_threshold: float = 0.03,   # oil up >3% over window
-        inr_threshold: float = 0.01,   # rupee weakens >1% over window
-        vix_threshold: float = 0.20,   # VIX spikes >20% over window
-    ):
-        self.window        = window
-        self.oil_threshold = oil_threshold
-        self.inr_threshold = inr_threshold
-        self.vix_threshold = vix_threshold
-
-    def compute(self, data: pd.DataFrame) -> pd.Series:
-        oil_trend = data["CL=F"].pct_change(self.window)
-        inr_trend = data["INR=X"].pct_change(self.window)
-        vix_trend = data["^INDIAVIX"].pct_change(self.window)
-
-        oil_bearish = oil_trend > self.oil_threshold   # oil rising
-        inr_bearish = inr_trend > self.inr_threshold   # rupee weakening
-        vix_bearish = vix_trend > self.vix_threshold   # fear spiking
-
-        # Only fire when ALL THREE agree — this filters out global risk-on
-        supply_shock = oil_bearish & inr_bearish & vix_bearish
-
-        signal = pd.Series(0.0, index=data.index, name=self.name)
-        signal[supply_shock] = -1.0
-        return signal
-
+    def __init__(self, window=10, oil_threshold=0.03, inr_threshold=0.01, vix_threshold=0.20):
+        self.window = window; self.oil_threshold = oil_threshold
+        self.inr_threshold = inr_threshold; self.vix_threshold = vix_threshold
+    def compute(self, data):
+        oil = data["CL=F"].pct_change(self.window) > self.oil_threshold
+        inr = data["INR=X"].pct_change(self.window) > self.inr_threshold
+        vix = data["^INDIAVIX"].pct_change(self.window) > self.vix_threshold
+        s = pd.Series(0.0, index=data.index, name=self.name)
+        s[oil & inr & vix] = -1.0
+        return s
 
 class PanicShortSignal(MacroSignal):
-    """
-    Detects market panic events (COVID-style crashes) where fear becomes extreme.
-
-    Fires when ALL THREE conditions hold:
-      - India VIX level         > vix_level    (absolute fear threshold, default 25)
-      - India VIX 10d change    > vix_spike    (fear accelerating, default 50%)
-      - NIFTY below its 100 DMA               (confirmed downtrend)
-
-    This combination has never fired during bull markets in 2020-2025 data.
-    Average next-day NIFTY return when fired: -1.016% vs +0.055% baseline.
-
-    Returns:
-      -1  when panic conditions met  → short NIFTY
-       0  otherwise
-    """
     name = "panic_short"
-
-    def __init__(
-        self,
-        vix_level: float = 25.0,   # absolute VIX threshold
-        vix_spike: float = 0.50,   # VIX must have risen >50% over 10 days
-        window: int = 10,
-        dma: int = 100,
-    ):
-        self.vix_level = vix_level
-        self.vix_spike = vix_spike
-        self.window    = window
-        self.dma       = dma
-
-    def compute(self, data: pd.DataFrame) -> pd.Series:
-        vix      = data["^INDIAVIX"]
-        vix_lvl  = vix >= self.vix_level
-        vix_spk  = vix.pct_change(self.window) > self.vix_spike
-        below_dma = data["^NSEI"].ffill() < data["^NSEI"].ffill().rolling(self.dma).mean()
-
-        panic = vix_lvl & vix_spk & below_dma
-
-        signal = pd.Series(0.0, index=data.index, name=self.name)
-        signal[panic] = -1.0
-        return signal
-
+    def __init__(self, vix_level=25.0, vix_spike=0.50, window=10, dma=100):
+        self.vix_level = vix_level; self.vix_spike = vix_spike
+        self.window = window; self.dma = dma
+    def compute(self, data):
+        vix = data["^INDIAVIX"]
+        panic = ((vix >= self.vix_level)
+                 & (vix.pct_change(self.window) > self.vix_spike)
+                 & (data["^NSEI"].ffill() < data["^NSEI"].ffill().rolling(self.dma).mean()))
+        s = pd.Series(0.0, index=data.index, name=self.name)
+        s[panic] = -1.0
+        return s
 
 class USDINRSignal(MacroSignal):
-    """
-    Signal based on USD/INR trend (INR=X on Yahoo Finance).
-    Used as an ENTRY signal — strengthening rupee signals healthy macro conditions.
-    Sustained rupee weakening → bearish (FII outflows, import inflation)
-    Sustained rupee strengthening → bullish
-    """
     name = "usdinr"
-
-    def __init__(self, window: int = 10, threshold: float = 0.01):
-        self.window = window
-        self.threshold = threshold
-
-    def compute(self, data: pd.DataFrame) -> pd.Series:
-        usdinr_rolling = data["INR=X"].pct_change(self.window)
-        signal = pd.Series(0.0, index=data.index, name=self.name)
-        # Entry signal only — strengthening rupee → long. Never short.
-        # Shorting is handled exclusively by PanicShortSignal.
-        signal[usdinr_rolling < -self.threshold] = 1.0
-        return signal
-
+    def __init__(self, window=10, threshold=0.01):
+        self.window = window; self.threshold = threshold
+    def compute(self, data):
+        s = pd.Series(0.0, index=data.index, name=self.name)
+        s[data["INR=X"].pct_change(self.window) < -self.threshold] = 1.0
+        return s
 
 class IndiaVIXSignal(MacroSignal):
-    """
-    Signal based on India VIX (^INDIAVIX) trend.
-    Used as an ENTRY signal — falling VIX signals calm conditions, go long.
-    Rising VIX → fear increasing → bearish
-    Falling VIX → fear subsiding → bullish
-    """
     name = "india_vix"
-
-    def __init__(self, window: int = 10, threshold: float = 0.20):
-        self.window = window
-        self.threshold = threshold
-
-    def compute(self, data: pd.DataFrame) -> pd.Series:
-        vix_rolling = data["^INDIAVIX"].pct_change(self.window)
-        signal = pd.Series(0.0, index=data.index, name=self.name)
-        # Entry signal only — falling VIX → calm conditions → long. Never short.
-        # Shorting is handled exclusively by PanicShortSignal.
-        signal[vix_rolling < -self.threshold] = 1.0
-        return signal
-
-
-# ---------------------------------------------------------------------------
-# Regime Filter
-# ---------------------------------------------------------------------------
+    def __init__(self, window=10, threshold=0.20):
+        self.window = window; self.threshold = threshold
+    def compute(self, data):
+        s = pd.Series(0.0, index=data.index, name=self.name)
+        s[data["^INDIAVIX"].pct_change(self.window) < -self.threshold] = 1.0
+        return s
 
 class RegimeFilter:
-    """
-    Determines whether NIFTY is in a bull or bear market using a moving average.
-
-    Bull regime: NIFTY price > N-day MA  → allow longs
-    Bear regime: NIFTY price < N-day MA  → force flat (or allow shorts)
-
-    window=200 : captures full annual trend, fewer false signals
-    window=100 : more responsive, catches turns ~2 months faster
-    """
-
-    def __init__(self, window: int = 200, target: str = "^NSEI"):
-        self.window = window
-        self.target = target
-
-    def bull_mask(self, data: pd.DataFrame) -> pd.Series:
-        """Returns True on days NIFTY is above its moving average (bull regime).
-        Forward-fills prices first so NaN gaps (holidays, cross-market mismatches)
-        don't starve the rolling window of valid observations.
-        """
+    def __init__(self, window=200, target="^NSEI"):
+        self.window = window; self.target = target
+    def bull_mask(self, data):
         price = data[self.target].ffill()
-        ma = price.rolling(self.window).mean()
-        return (price > ma).rename(f"bull_{self.window}dma")
-
-    def bear_mask(self, data: pd.DataFrame) -> pd.Series:
-        """Returns True on days NIFTY is below its moving average (bear regime)."""
-        return (~self.bull_mask(data)).rename(f"bear_{self.window}dma")
+        return (price > price.rolling(self.window).mean()).rename(f"bull_{self.window}dma")
 
 
 # ---------------------------------------------------------------------------
-# Signal Combiner
+# SignalCombiner v1.1 — emits nifty_position AND gold_position
 # ---------------------------------------------------------------------------
 
 class SignalCombiner:
     """
-    Three-lane signal architecture — each lane has independent hold logic:
-
-    ENTRY  lane: signals that push long (+1). Hold via ffill when neutral.
-                 Example: INR strengthening, VIX falling.
-
-    EXIT   lane: signals that force flat (0) when firing. No hold — resets
-                 each day based on current conditions.
-                 Example: SupplyShockSignal (geopolitical/supply crisis).
-
-    SHORT  lane: signals that force short (-1) when firing. Hold configurable.
-                 Example: PanicShortSignal (COVID-style extreme VIX).
-
-    Priority (applied in order):
-      1. Start with entry lane → long/flat with hold
-      2. Exit lane overrides to flat when firing
-      3. Short lane overrides to short when firing (with hold if configured)
-      4. Regime filter as final gate
-
-    This allows each crisis type to have its own exit behaviour:
-      - Supply shock: flat immediately, resets when signal stops
-      - Panic:        short with hold, exits when VIX calms down
+    v1.1: positions DataFrame with two columns: nifty_position, gold_position.
+    Gold rotation is opt-in via two flags (default both False = v1 behavior).
     """
 
-    def __init__(self, regime_filter: RegimeFilter = None,
-                 reentry_momentum_threshold: float = 0.005):
-        self.entry_signals: list[tuple[MacroSignal, float]]        = []
-        self.exit_signals:  list[MacroSignal]                      = []
-        self.short_signals: list[tuple]                            = []  # (signal, hold, max_hold_days, exit_ma_fast, exit_ma_slow)
-        self.regime_filter                  = regime_filter
-        self.reentry_momentum_threshold     = reentry_momentum_threshold  # NIFTY 5d return needed to re-enter after exit
+    def __init__(self, regime_filter=None, reentry_momentum_threshold=0.005,
+                 rotate_to_gold_on_stress_flat=False,
+                 rotate_to_gold_on_panic_short=False):
+        self.entry_signals = []
+        self.exit_signals = []
+        self.short_signals = []
+        self.regime_filter = regime_filter
+        self.reentry_momentum_threshold = reentry_momentum_threshold
+        self.rotate_to_gold_on_stress_flat = rotate_to_gold_on_stress_flat
+        self.rotate_to_gold_on_panic_short = rotate_to_gold_on_panic_short
 
-    def add_entry(self, signal: MacroSignal, weight: float = 1.0):
-        """Long-only entry signal. Contributes +1 to score, held via ffill."""
-        self.entry_signals.append((signal, weight))
-        return self
-
-    def add_exit(self, signal: MacroSignal):
-        """Exit-to-flat signal. Forces position to 0 when firing, no hold."""
-        self.exit_signals.append(signal)
-        return self
-
-    def add_short(self, signal: MacroSignal, hold: bool = True, max_hold_days: int = 60,
-                  exit_ma_fast: int = None, exit_ma_slow: int = None):
-        """Short signal. Forces position to -1 when firing.
-        hold=True : short persists for up to max_hold_days after last signal fire.
-        hold=False: short only active on days signal fires.
-        exit_ma_fast/slow: if set, exit short early when NIFTY fast MA crosses above slow MA
-                           (short-term trend has reversed). Replaces the fixed day hold cap.
-        """
+    def add_entry(self, signal, weight=1.0):
+        self.entry_signals.append((signal, weight)); return self
+    def add_exit(self, signal):
+        self.exit_signals.append(signal); return self
+    def add_short(self, signal, hold=True, max_hold_days=60,
+                  exit_ma_fast=None, exit_ma_slow=None):
         self.short_signals.append((signal, hold, max_hold_days, exit_ma_fast, exit_ma_slow))
         return self
 
-    def compute_position(self, data: pd.DataFrame) -> pd.Series:
-        # -------------------------------------------------------------------
-        # Lane 1: Entry signals → long/flat with hold
-        # -------------------------------------------------------------------
+    def compute_positions(self, data):
+        """
+        Returns DataFrame with columns: nifty_position, gold_position.
+        Also tracks the source state of each day for diagnostics.
+        """
+        n = len(data)
+        idx = data.index
+
+        # Lane 1: entry → long/flat with hold
         if self.entry_signals:
             total_weight = sum(w for _, w in self.entry_signals)
-            score = pd.Series(0.0, index=data.index)
+            score = pd.Series(0.0, index=idx)
             for signal, weight in self.entry_signals:
                 score += signal.compute(data) * (weight / total_weight)
-            position = pd.Series(0.0, index=data.index)
+            position = pd.Series(0.0, index=idx)
             position[score > 0] = 1.0
         else:
-            score    = pd.Series(0.0, index=data.index)
-            position = pd.Series(1.0, index=data.index)
+            position = pd.Series(1.0, index=idx)
 
-        # Hold: stay in current position when entry signals are neutral.
-        # fillna(1.0): default to long before first signal fires.
         position = position.replace(0.0, np.nan).ffill().fillna(1.0)
 
-        # -------------------------------------------------------------------
-        # Lane 2: Exit signals → flat while firing + momentum-based re-entry
-        # Stay flat as long as exit signal is active OR NIFTY has not yet
-        # recovered (5-day return < reentry_momentum_threshold).
-        # This replaces the fixed N-day cooldown with a market-driven check.
-        # -------------------------------------------------------------------
+        # Re-entry momentum gate
         nifty_mom = data["^NSEI"].ffill().pct_change(5)
         nifty_recovering = nifty_mom > self.reentry_momentum_threshold
 
+        # Track which days are "stress flat" (supply shock latch or post-short flat)
+        # so we can rotate to gold if requested.
+        stress_flat_mask = pd.Series(False, index=idx)
+
+        # Lane 2: exit signals → flat with momentum-gated re-entry
         for signal in self.exit_signals:
-            firing       = signal.compute(data) < 0
-            firing_vals  = firing.values
+            firing = signal.compute(data) < 0
+            firing_vals = firing.values
             recover_vals = nifty_recovering.values
-            in_exit      = False
-            exit_flat    = [False] * len(data)
-            for i in range(len(data)):
+            in_exit = False
+            exit_flat = [False] * n
+            for i in range(n):
                 if firing_vals[i]:
-                    in_exit      = True   # exit signal active → latch flat
-                    exit_flat[i] = True
+                    in_exit = True; exit_flat[i] = True
                 elif in_exit:
                     if recover_vals[i]:
-                        in_exit = False   # NIFTY recovered → allow re-entry
+                        in_exit = False
                     else:
-                        exit_flat[i] = True  # still waiting for recovery
-            position[pd.Series(exit_flat, index=data.index)] = 0.0
+                        exit_flat[i] = True
+            ef_series = pd.Series(exit_flat, index=idx)
+            position[ef_series] = 0.0
+            stress_flat_mask = stress_flat_mask | ef_series
 
-        # -------------------------------------------------------------------
-        # Lane 3: Short signals → force short when firing
-        # MA crossover exit: if exit_ma_fast/slow set, exit short early when
-        # NIFTY fast MA rises above slow MA (short-term trend has reversed).
-        # -------------------------------------------------------------------
+        # Lane 3: short signals → -1 when firing.
+        # If rotate_to_gold_on_panic_short=True, this overrides to flat
+        # (gold rotation handled separately below).
+        panic_short_mask = pd.Series(False, index=idx)  # days panic-short fired
         for signal, hold, max_hold_days, exit_ma_fast, exit_ma_slow in self.short_signals:
             raw = signal.compute(data) < 0
             if hold and max_hold_days > 0:
-                fired = raw.astype(float)
-                held  = fired.rolling(window=max_hold_days, min_periods=1).max()
-                if exit_ma_fast is not None and exit_ma_slow is not None:
-                    nifty       = data["^NSEI"].ffill()
-                    ma_fast     = nifty.rolling(exit_ma_fast).mean()
-                    ma_slow     = nifty.rolling(exit_ma_slow).mean()
-                    ma_bullish  = ma_fast > ma_slow   # short-term trend reversed
-                    # Stay short only when hold active AND trend still bearish
-                    position[(held == 1.0) & ~ma_bullish] = -1.0
+                held = raw.astype(float).rolling(window=max_hold_days, min_periods=1).max()
+                if exit_ma_fast and exit_ma_slow:
+                    nifty = data["^NSEI"].ffill()
+                    ma_bullish = nifty.rolling(exit_ma_fast).mean() > nifty.rolling(exit_ma_slow).mean()
+                    short_active = (held == 1.0) & ~ma_bullish
                 else:
-                    position[held == 1.0] = -1.0
+                    short_active = (held == 1.0)
             else:
-                position[raw] = -1.0
+                short_active = raw
+            panic_short_mask = panic_short_mask | short_active
+            position[short_active] = -1.0
 
-        # -------------------------------------------------------------------
-        # Post-short flat: after a short ends, stay flat until a fresh entry
-        # signal fires. Prevents snapping directly from short to long via
-        # Lane 1's pre-computed ffill without re-entry validation.
-        # -------------------------------------------------------------------
+        # Post-short flat: stay flat after short ends until momentum recovers
         if self.short_signals:
-            is_short        = (position == -1.0).values
-            is_fresh        = nifty_recovering.values  # NIFTY 5d return > threshold
-            in_cooldown     = False
-            post_short_flat = [False] * len(data)
-            for i in range(1, len(data)):
-                if is_short[i - 1] and not is_short[i]:
-                    in_cooldown = True          # short just ended
-                if in_cooldown and is_fresh[i]:
-                    in_cooldown = False         # fresh entry signal — re-enter
-                if in_cooldown and not is_fresh[i] and not is_short[i]:
-                    post_short_flat[i] = True   # waiting for signal — stay flat
-            position[pd.Series(post_short_flat, index=data.index)] = 0.0
+            is_short = (position == -1.0).values
+            is_fresh = nifty_recovering.values
+            in_cd = False; psf = [False] * n
+            for i in range(1, n):
+                if is_short[i-1] and not is_short[i]: in_cd = True
+                if in_cd and is_fresh[i]: in_cd = False
+                if in_cd and not is_fresh[i] and not is_short[i]: psf[i] = True
+            psf_series = pd.Series(psf, index=idx)
+            position[psf_series] = 0.0
+            stress_flat_mask = stress_flat_mask | psf_series
 
-        # -------------------------------------------------------------------
-        # Regime filter: final gate
-        # Bull regime → no shorts allowed
-        # Bear regime → no longs allowed
-        # -------------------------------------------------------------------
+        # Regime filter: kill longs in bear, shorts in bull
+        regime_killed_short = pd.Series(False, index=idx)
         if self.regime_filter:
             bull = self.regime_filter.bull_mask(data)
-            position[(position > 0)  & ~bull] = 0.0   # exit longs in bear regime
-            position[(position < 0)  &  bull] = 0.0   # exit shorts in bull regime
+            position[(position > 0) & ~bull] = 0.0
+            killed_mask = (position < 0) & bull
+            regime_killed_short = killed_mask
+            position[killed_mask] = 0.0
 
-        return position.rename("position")
+        # ── Build dual-asset positions ──────────────────────────────────────
+        nifty_position = position.copy()
+        gold_position  = pd.Series(0.0, index=idx)
+
+        # Config 2 leg: gold during stress flat
+        if self.rotate_to_gold_on_stress_flat:
+            rotate_mask = stress_flat_mask & (nifty_position == 0.0)
+            gold_position[rotate_mask] = 1.0
+
+        # Config 3 leg: gold replaces panic short
+        if self.rotate_to_gold_on_panic_short:
+            # Wherever panic-short fired AND survived regime filter (i.e. nifty=-1)
+            # flip to flat NIFTY + long gold
+            panic_short_active = (nifty_position == -1.0)
+            nifty_position[panic_short_active] = 0.0
+            gold_position[panic_short_active] = 1.0
+
+        return pd.DataFrame({
+            "nifty_position": nifty_position.rename(None),
+            "gold_position":  gold_position.rename(None),
+        }, index=idx)
 
 
 # ---------------------------------------------------------------------------
-# Strategy Runner
+# RBI Repo Rate Step Function (sourced from RBI MPC press releases)
+# Used to credit cash yield on fully-flat days. Each tuple is (effective_date, rate%).
+# Forward-filled per day — repo rate stays constant between MPC announcements.
+# ---------------------------------------------------------------------------
+
+RBI_REPO_RATE_HISTORY = [
+    ("2008-04-01", 7.75), ("2008-06-12", 8.00), ("2008-06-25", 8.50), ("2008-07-30", 9.00),
+    ("2008-10-20", 8.00), ("2008-11-03", 7.50), ("2008-12-08", 6.50),
+    ("2009-01-05", 5.50), ("2009-03-05", 5.00), ("2009-04-21", 4.75),
+    ("2010-03-19", 5.00), ("2010-04-20", 5.25), ("2010-07-02", 5.50), ("2010-07-27", 5.75),
+    ("2010-09-16", 6.00), ("2010-11-02", 6.25),
+    ("2011-01-25", 6.50), ("2011-03-17", 6.75), ("2011-05-03", 7.25), ("2011-06-16", 7.50),
+    ("2011-07-26", 8.00), ("2011-09-16", 8.25), ("2011-10-25", 8.50),
+    ("2012-04-17", 8.00),
+    ("2013-01-29", 7.75), ("2013-03-19", 7.50), ("2013-05-03", 7.25),
+    ("2013-09-20", 7.50), ("2013-10-29", 7.75),
+    ("2014-01-28", 8.00),
+    ("2015-01-15", 7.75), ("2015-03-04", 7.50), ("2015-06-02", 7.25), ("2015-09-29", 6.75),
+    ("2016-04-05", 6.50), ("2016-10-04", 6.25),
+    ("2017-08-02", 6.00),
+    ("2018-06-06", 6.25), ("2018-08-01", 6.50),
+    ("2019-02-07", 6.25), ("2019-04-04", 6.00), ("2019-06-06", 5.75),
+    ("2019-08-07", 5.40), ("2019-10-04", 5.15),
+    ("2020-03-27", 4.40), ("2020-05-22", 4.00),
+    ("2022-05-04", 4.40), ("2022-06-08", 4.90), ("2022-08-05", 5.40),
+    ("2022-09-30", 5.90), ("2022-12-07", 6.25),
+    ("2023-02-08", 6.50),
+    ("2025-02-07", 6.25), ("2025-04-09", 6.00), ("2025-06-06", 5.50),
+]
+
+
+def build_rbi_repo_rate_series(target_index: pd.DatetimeIndex) -> pd.Series:
+    """
+    Returns a Series indexed by target_index with the active RBI repo rate (as
+    decimal, e.g. 0.06 = 6%) on each day, forward-filled from the most recent
+    rate change on or before that date.
+    """
+    df = pd.DataFrame(RBI_REPO_RATE_HISTORY, columns=["date", "rate"])
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").set_index("date")
+    # Step function: ffill across calendar days, then reindex to target trading days
+    full_daily = df.reindex(pd.date_range(df.index.min(), target_index.max(), freq="D"),
+                            method="ffill")
+    aligned = full_daily.reindex(target_index, method="ffill")
+    return (aligned["rate"] / 100.0).rename("repo_rate")
+
+
+# ---------------------------------------------------------------------------
+# MacroStrategy v1.1 — applies dual positions with per-asset costs +
+# time-varying cash yield on fully-flat days
 # ---------------------------------------------------------------------------
 
 class MacroStrategy:
-    """
-    Applies combined signal positions to NIFTY returns and computes PnL.
-    """
+    """v1.1: dual-asset PnL with per-asset transaction costs and RBI repo
+    rate cash yield on fully-flat days."""
 
-    def __init__(self, combiner: SignalCombiner, target: str = "^NSEI"):
+    def __init__(self, combiner, target="^NSEI", gold_target="GOLDBEES.NS",
+                 nifty_cost_bps=3, gold_cost_bps=5,
+                 cash_cost_bps=0,
+                 use_cash_yield=True):
         self.combiner = combiner
-        self.target   = target
+        self.target = target
+        self.gold_target = gold_target
+        self.nifty_cost_bps = nifty_cost_bps
+        self.gold_cost_bps  = gold_cost_bps
+        self.cash_cost_bps  = cash_cost_bps   # bps to enter/exit cash sweep (default 0)
+        self.use_cash_yield = use_cash_yield  # toggle cash yield on/off for sensitivity
 
-    def run(self, data: pd.DataFrame, cost_bps: float = 0) -> pd.DataFrame:
+    def run(self, data):
         nifty_returns = data[self.target].pct_change().rename("nifty_return")
-        position = self.combiner.compute_position(data)
+        # Gold returns: zero where data is missing (pre-2009 for GOLDBEES.NS)
+        if self.gold_target in data.columns:
+            gold_raw = data[self.gold_target]
+            gold_returns = gold_raw.pct_change()
+            # Force gold_position to 0 where gold price is NaN (no data → can't trade)
+            gold_available = gold_raw.notna()
+        else:
+            gold_returns = pd.Series(0.0, index=data.index)
+            gold_available = pd.Series(False, index=data.index)
+        gold_returns = gold_returns.fillna(0.0).rename("gold_return")
 
-        # Transaction costs: paid on each day position changes.
-        # |Δposition| = 1 for normal entry/exit, 2 for long↔short flips.
-        # Costs are realised on the day of the trade (same day as position change).
-        trade_cost = position.diff().abs() * (cost_bps / 10000)
+        positions = self.combiner.compute_positions(data)
+        nifty_pos = positions["nifty_position"]
+        gold_pos  = positions["gold_position"]
 
-        # Signal from day T applied on day T+1; costs on day of change
-        strategy_returns = (position.shift(1) * nifty_returns - trade_cost).rename("strategy_return")
+        # Mask out gold position when no data available (forced flat)
+        gold_pos = gold_pos.where(gold_available, 0.0)
+
+        # Per-asset costs
+        nifty_cost = nifty_pos.diff().abs() * (self.nifty_cost_bps / 10000)
+        gold_cost  = gold_pos.diff().abs()  * (self.gold_cost_bps  / 10000)
+
+        nifty_pnl = nifty_pos.shift(1) * nifty_returns - nifty_cost
+        gold_pnl  = gold_pos.shift(1)  * gold_returns  - gold_cost
+
+        # Cash yield on fully-flat days (no NIFTY exposure, no gold exposure)
+        # Yield rate = RBI repo rate (time-varying, daily step function)
+        cash_position = ((nifty_pos == 0.0) & (gold_pos == 0.0)).astype(float)
+        if self.use_cash_yield:
+            repo_rate = build_rbi_repo_rate_series(data.index)
+            daily_cash_yield = repo_rate / 252
+            cash_pnl = cash_position.shift(1) * daily_cash_yield
+        else:
+            cash_pnl = pd.Series(0.0, index=data.index)
+        # Cost to enter/exit cash sweep (default 0 — institutional auto-sweep is free)
+        cash_cost = cash_position.diff().abs() * (self.cash_cost_bps / 10000)
+
+        strategy_returns = (nifty_pnl + gold_pnl + cash_pnl - cash_cost).rename("strategy_return")
 
         results = pd.DataFrame({
-            "nifty_return":       nifty_returns,
-            "position":           position,
-            "strategy_return":    strategy_returns,
-            "cumulative_nifty":   (1 + nifty_returns).cumprod() - 1,
-            "cumulative_strategy":(1 + strategy_returns).cumprod() - 1,
+            "nifty_return":    nifty_returns,
+            "gold_return":     gold_returns,
+            "nifty_position":  nifty_pos,
+            "gold_position":   gold_pos,
+            "strategy_return": strategy_returns,
         })
-
+        # Backward-compat: combined "position" column for diagnostic display.
+        # +1 = long NIFTY, -1 = short NIFTY, +2 = long gold, 0 = flat (cash)
+        combined = nifty_pos.copy()
+        combined[(nifty_pos == 0.0) & (gold_pos == 1.0)] = 2.0
+        results["position"] = combined
         return results
 
 
 # ---------------------------------------------------------------------------
-# Data Loader
+# Helpers
 # ---------------------------------------------------------------------------
 
-def load_data(tickers: list[str], start: str, end: str) -> pd.DataFrame:
-    """Downloads adjusted close prices for the given tickers.
-    Forward-fills to handle cross-market holiday gaps (e.g. NSE closed on US trading days).
-    """
-    raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    prices = raw["Close"]
-    prices.dropna(how="all", inplace=True)
-    prices = prices.ffill()
-    return prices
+RF = 0.06
+
+def metrics(ret_series):
+    r = ret_series.dropna()
+    cum = (1 + r).cumprod()
+    n_years = len(r) / 252
+    total = cum.iloc[-1] - 1
+    cagr = (1 + total) ** (1 / n_years) - 1
+    vol = r.std() * np.sqrt(252)
+    excess = r - RF / 252
+    sharpe = (excess.mean() / excess.std()) * np.sqrt(252)
+    downside = r[r < 0].std() * np.sqrt(252)
+    sortino = (cagr - RF) / downside if downside > 0 else np.nan
+    dd = ((cum - cum.cummax()) / cum.cummax()).min()
+    calmar = cagr / abs(dd) if dd != 0 else np.nan
+    return dict(total=total, cagr=cagr, vol=vol, sharpe=sharpe,
+                sortino=sortino, max_dd=dd, calmar=calmar)
+
+
+def position_breakdown(res):
+    """Counts of position states. Mutually exclusive — must sum to total days."""
+    np_ = res["nifty_position"]; gp_ = res["gold_position"]
+    long_n  = ((np_ ==  1.0)).sum()
+    short_n = ((np_ == -1.0)).sum()
+    long_g  = ((np_ ==  0.0) & (gp_ == 1.0)).sum()
+    flat    = ((np_ ==  0.0) & (gp_ == 0.0)).sum()
+    return {"long_nifty": int(long_n), "short_nifty": int(short_n),
+            "long_gold": int(long_g), "flat": int(flat),
+            "total": int(long_n + short_n + long_g + flat)}
+
+
+def make_combiner(rotate_stress=False, rotate_panic=False):
+    rf = RegimeFilter(window=100)
+    c = SignalCombiner(regime_filter=rf,
+                       rotate_to_gold_on_stress_flat=rotate_stress,
+                       rotate_to_gold_on_panic_short=rotate_panic)
+    c.add_entry(USDINRSignal(window=10, threshold=0.01), weight=1.5)
+    c.add_entry(IndiaVIXSignal(window=10, threshold=0.20), weight=1.5)
+    c.add_exit(SupplyShockSignal(window=10, oil_threshold=0.03,
+                                 inr_threshold=0.01, vix_threshold=0.20))
+    c.add_short(PanicShortSignal(vix_level=25, vix_spike=0.50, window=10, dma=100),
+                hold=False, max_hold_days=60, exit_ma_fast=5, exit_ma_slow=20)
+    return c
 
 
 # ---------------------------------------------------------------------------
-# Reporting
+# Main
 # ---------------------------------------------------------------------------
-
-def print_results(label: str, results: pd.DataFrame, start: str, end: str):
-    pos_counts = results["position"].value_counts().sort_index()
-    total_days  = len(results)
-    nifty_ret   = results["cumulative_nifty"].iloc[-1] * 100
-    strat_ret   = results["cumulative_strategy"].iloc[-1] * 100
-
-    # Sharpe ratio (annualised, risk-free ~6% for India)
-    excess = results["strategy_return"] - 0.06 / 252
-    sharpe = (excess.mean() / excess.std()) * np.sqrt(252) if excess.std() > 0 else 0
-
-    # Max drawdown
-    cum = (1 + results["strategy_return"]).cumprod()
-    max_dd = ((cum - cum.cummax()) / cum.cummax()).min() * 100
-
-    print(f"\n{'='*55}")
-    print(f"  {label}")
-    print(f"  Period: {start} to {end}")
-    print(f"{'='*55}")
-    print(f"  NIFTY Buy & Hold : {nifty_ret:.1f}%")
-    print(f"  Macro Strategy   : {strat_ret:.1f}%")
-    print(f"  Sharpe Ratio     : {sharpe:.2f}")
-    print(f"  Max Drawdown     : {max_dd:.1f}%")
-    print(f"\n  Position breakdown ({total_days} total days):")
-    for pos, count in pos_counts.items():
-        label_str = {1.0: "Long", -1.0: "Short", 0.0: "Flat"}.get(pos, str(pos))
-        print(f"    {label_str:6s}: {count:4d} days ({count/total_days*100:.1f}%)")
-
-
-# ---------------------------------------------------------------------------
-# Entry Point
-# ---------------------------------------------------------------------------
-
-def run_period(label: str, strategy: MacroStrategy, data: pd.DataFrame,
-               start: str, end: str, cost_bps: float = 0):
-    results = strategy.run(data, cost_bps=cost_bps)
-    results = results.loc[start:end]
-    results["cumulative_nifty"]    = (1 + results["nifty_return"]).cumprod() - 1
-    results["cumulative_strategy"] = (1 + results["strategy_return"]).cumprod() - 1
-    print_results(label, results, start, end)
-    return results
-
 
 def main():
-    WARMUP_START = "2006-01-01"   # warmup so DMA is ready by trade start
-    TRAIN_START  = "2008-04-01"   # in-sample: 2008-2025 (India VIX launches March 2008)
-    TRAIN_END    = "2025-12-31"
-    TEST_START   = "2026-01-01"   # out-of-sample: 2026 YTD (geopolitical crisis)
-    TEST_END     = "2026-04-25"
-    TICKERS      = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX"]
+    WARMUP = "2006-01-01"
+    START  = "2008-04-01"
+    END    = "2025-12-31"
+    TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS"]
 
-    print("Downloading data...")
-    data = load_data(TICKERS, WARMUP_START, TEST_END)
+    print("Downloading data ...", file=sys.stderr)
+    raw = yf.download(TICKERS, start=WARMUP, end="2026-01-01",
+                      auto_adjust=True, progress=False)["Close"]
+    raw.dropna(how="all", inplace=True)
+    # NOTE: do NOT ffill GOLDBEES.NS pre-2010 (no data → gold position must stay flat)
+    # ffill the others (NSE/oil/INR/VIX) for cross-market holiday alignment
+    for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX"]:
+        if col in raw.columns:
+            raw[col] = raw[col].ffill()
+    # GOLDBEES.NS: ffill ONLY after its first valid date (so intra-series holiday gaps
+    # are filled, but pre-2010 stays NaN)
+    if "GOLDBEES.NS" in raw.columns:
+        first_valid = raw["GOLDBEES.NS"].first_valid_index()
+        if first_valid is not None:
+            mask = raw.index >= first_valid
+            raw.loc[mask, "GOLDBEES.NS"] = raw.loc[mask, "GOLDBEES.NS"].ffill()
+        gold_first = raw["GOLDBEES.NS"].first_valid_index()
+        print(f"\nGOLDBEES.NS data starts: {gold_first.date() if gold_first else 'NONE'}",
+              file=sys.stderr)
 
-    def make_combiner(rf, with_panic=False, panic_hold=True):
-        c = SignalCombiner(regime_filter=rf)
-        # Entry lane: INR strengthening + VIX calming → go long, hold
-        c.add_entry(USDINRSignal(window=10,   threshold=0.01), weight=1.5)
-        c.add_entry(IndiaVIXSignal(window=10, threshold=0.20), weight=1.5)
-        # Exit lane: supply shock → flat immediately, resets each day
-        c.add_exit(SupplyShockSignal(window=10, oil_threshold=0.03,
-                                     inr_threshold=0.01, vix_threshold=0.20))
-        # Short lane: panic → short with/without hold
-        if with_panic:
-            c.add_short(PanicShortSignal(vix_level=25, vix_spike=0.50, window=10, dma=rf.window),
-                        hold=panic_hold, max_hold_days=60,
-                        exit_ma_fast=5, exit_ma_slow=20)
-        return c
-
-    # -----------------------------------------------------------------------
-    # In-sample: 2020–2025 (training period)
-    # -----------------------------------------------------------------------
-    print("\n" + "="*55)
-    print("  IN-SAMPLE RESULTS (2020–2025)")
-    print("="*55)
-
+    # Run all three configs
     configs = [
-        ("100 DMA | long only (baseline)",
-         MacroStrategy(make_combiner(RegimeFilter(window=100)))),
-        ("100 DMA | + panic short, hold",
-         MacroStrategy(make_combiner(RegimeFilter(window=100), with_panic=True, panic_hold=True))),
-        ("100 DMA | + panic short, no hold",
-         MacroStrategy(make_combiner(RegimeFilter(window=100), with_panic=True, panic_hold=False))),
-        ("50 DMA  | long only (baseline)",
-         MacroStrategy(make_combiner(RegimeFilter(window=50)))),
-        ("50 DMA  | + panic short, hold",
-         MacroStrategy(make_combiner(RegimeFilter(window=50),  with_panic=True, panic_hold=True))),
-        ("50 DMA  | + panic short, no hold",
-         MacroStrategy(make_combiner(RegimeFilter(window=50),  with_panic=True, panic_hold=False))),
+        ("Config 1 (no gold)",       make_combiner(False, False)),
+        ("Config 2 (gold flat)",     make_combiner(True,  False)),
+        ("Config 3 (gold all)",      make_combiner(True,  True)),
     ]
 
-    BASE_COST_BPS = 3
+    runs = []
+    for label, combiner in configs:
+        s = MacroStrategy(combiner, nifty_cost_bps=3, gold_cost_bps=5)
+        r = s.run(raw).loc[START:END].copy()
+        runs.append((label, r))
 
-    for label, strategy in configs:
-        run_period(label, strategy, data, TRAIN_START, TRAIN_END, cost_bps=BASE_COST_BPS)
+    # ── Verification checks ───────────────────────────────────────────────
+    print("\nVERIFICATION CHECKS")
+    print("=" * 60)
+    for label, r in runs:
+        bd = position_breakdown(r)
+        check = "OK" if bd["total"] == len(r) else f"FAIL (sum {bd['total']} != {len(r)})"
+        print(f"  {label}: {bd}  [days sum: {check}]")
 
-    # -----------------------------------------------------------------------
-    # Transaction cost sensitivity analysis (in-sample)
-    # -----------------------------------------------------------------------
-    cost_levels = [0, 3, 5, 10, 15, 20]
+    # Specific assertions
+    bd1 = position_breakdown(runs[0][1])
+    bd2 = position_breakdown(runs[1][1])
+    bd3 = position_breakdown(runs[2][1])
+    print()
+    print(f"  Days long gold > 0 in Config 2:  {bd2['long_gold'] > 0}  ({bd2['long_gold']})")
+    print(f"  Days short NIFTY = 0 in Config 3: {bd3['short_nifty'] == 0}  ({bd3['short_nifty']})")
+    print(f"  Days short NIFTY > 0 in Config 1: {bd1['short_nifty'] > 0}  ({bd1['short_nifty']})")
+    print(f"  Days short NIFTY > 0 in Config 2: {bd2['short_nifty'] > 0}  ({bd2['short_nifty']})")
 
-    print("\n\n" + "="*80)
-    print("  TRANSACTION COST SENSITIVITY (in-sample 2008–2025)  [base = 3 bps]")
-    print("="*80)
+    # ── Comparison Table ──────────────────────────────────────────────────
+    print("\n\nCONFIGURATION COMPARISON — 2008-2025, base costs (NIFTY 3 bps, gold 5 bps)")
+    print("=" * 76)
+    m = [metrics(r["strategy_return"]) for _, r in runs]
+    bds = [position_breakdown(r) for _, r in runs]
 
-    # Header row: mark base case column
-    header = f"{'Config':<38}" + "".join(
-        f"  {'*' if c == BASE_COST_BPS else ' '}{c:>2}bps" for c in cost_levels
-    )
-    print(header)
-    print("-" * len(header))
+    # NIFTY benchmark for reference
+    nifty_only = runs[0][1]["nifty_return"]
+    m_nifty = metrics(nifty_only)
 
-    for label, strategy in configs:
-        # Collect (return%, sharpe) at each cost level
-        metrics = []
-        for bps in cost_levels:
-            res = strategy.run(data, cost_bps=bps)
-            res = res.loc[TRAIN_START:TRAIN_END].copy()
-            res["cumulative_strategy"] = (1 + res["strategy_return"]).cumprod() - 1
-            total_ret = res["cumulative_strategy"].iloc[-1] * 100
-            # Same Sharpe formula as print_results: daily excess / std * sqrt(252)
-            excess = res["strategy_return"] - 0.06 / 252
-            sharpe = (excess.mean() / excess.std()) * np.sqrt(252) if excess.std() > 0 else 0.0
-            metrics.append((total_ret, sharpe))
-
-        # Print one line per config: label + (return | sharpe) at each bps
-        ret_line    = f"{'  ' + label:<38}" + "".join(f"  {m[0]:>5.1f}%" for m in metrics)
-        sharpe_line = f"{'  Sharpe':<38}"  + "".join(f"  {m[1]:>5.2f} " for m in metrics)
-        print(ret_line)
-        print(sharpe_line)
-        print()
-
-    # -----------------------------------------------------------------------
-    # Out-of-sample: 2026 YTD (geopolitical crisis test)
-    # -----------------------------------------------------------------------
-    print("\n\n" + "="*55)
-    print("  OUT-OF-SAMPLE: 2026 YTD (Geopolitical Crisis)")
-    print("="*55)
-
-    oos_configs = [
-        ("100 DMA | long only",           MacroStrategy(make_combiner(RegimeFilter(window=100)))),
-        ("100 DMA | + panic short, hold", MacroStrategy(make_combiner(RegimeFilter(window=100), with_panic=True, panic_hold=True))),
-        ("50 DMA  | long only",           MacroStrategy(make_combiner(RegimeFilter(window=50)))),
-        ("50 DMA  | + panic short, hold", MacroStrategy(make_combiner(RegimeFilter(window=50),  with_panic=True, panic_hold=True))),
+    rows = [
+        ("Cumulative return",   [f"{x['total']*100:>7.1f}%" for x in m]),
+        ("CAGR",                [f"{x['cagr']*100:>7.2f}%"  for x in m]),
+        ("Sharpe",              [f"{x['sharpe']:>8.2f}"     for x in m]),
+        ("Sortino",             [f"{x['sortino']:>8.2f}"    for x in m]),
+        ("Calmar",              [f"{x['calmar']:>8.2f}"     for x in m]),
+        ("Max drawdown",        [f"{x['max_dd']*100:>7.1f}%" for x in m]),
+        ("Annualized vol",      [f"{x['vol']*100:>7.2f}%"   for x in m]),
+        ("Days long NIFTY",     [f"{b['long_nifty']:>8d}"   for b in bds]),
+        ("Days short NIFTY",    [f"{b['short_nifty']:>8d}"  for b in bds]),
+        ("Days long gold",      [f"{b['long_gold']:>8d}"    for b in bds]),
+        ("Days flat",           [f"{b['flat']:>8d}"         for b in bds]),
     ]
+    hdr = f"  {'Metric':<20}| {'Config 1':>10} | {'Config 2':>10} | {'Config 3':>10}"
+    sub = f"  {'':<20}| {'(no gold)':>10} | {'(gold flat)':>10} | {'(gold all)':>10}"
+    print(hdr)
+    print(sub)
+    print("  " + "-" * 20 + "+" + "-" * 12 + "+" + "-" * 12 + "+" + "-" * 11)
+    for label, vals in rows:
+        print(f"  {label:<20}| {vals[0]:>10} | {vals[1]:>10} | {vals[2]:>10}")
+    print(f"\n  (Reference) NIFTY B&H Sharpe={m_nifty['sharpe']:.2f}, "
+          f"CAGR={m_nifty['cagr']*100:.2f}%, MaxDD={m_nifty['max_dd']*100:.1f}%")
 
-    for label, strategy in oos_configs:
-        run_period(label, strategy, data, TEST_START, TEST_END, cost_bps=BASE_COST_BPS)
+    # ── Year-by-year ──────────────────────────────────────────────────────
+    print("\n\nYEAR-BY-YEAR RETURNS (%)")
+    print("  Year |   NIFTY | Config 1 | Config 2 | Config 3")
+    print("  -----+---------+----------+----------+---------")
+    annual_n = (1 + nifty_only).resample("YE").prod() - 1
+    annuals = [(1 + r["strategy_return"]).resample("YE").prod() - 1 for _, r in runs]
+    for ts in annual_n.index:
+        yr = ts.year
+        nv = annual_n.loc[ts] * 100
+        c1 = annuals[0].loc[ts] * 100
+        c2 = annuals[1].loc[ts] * 100
+        c3 = annuals[2].loc[ts] * 100
+        print(f"  {yr} | {nv:>+6.1f}% | {c1:>+7.1f}% | {c2:>+7.1f}% | {c3:>+7.1f}%")
 
-    # Show signal detail for the best OOS config (100 DMA)
-    _, best_oos = oos_configs[0]
-    test_results = best_oos.run(data, cost_bps=BASE_COST_BPS)
-    test_results = test_results.loc[TEST_START:TEST_END]
-    test_results["cumulative_nifty"]    = (1 + test_results["nifty_return"]).cumprod() - 1
-    test_results["cumulative_strategy"] = (1 + test_results["strategy_return"]).cumprod() - 1
+    # ── Crisis windows ────────────────────────────────────────────────────
+    print("\n\nCRISIS WINDOWS")
+    print("  Crisis    | Window           |   NIFTY | Config 1 | Config 2 | Config 3")
+    print("  ----------+------------------+---------+----------+----------+---------")
+    crises = [
+        ("GFC",      "2008-09-01", "2009-03-31"),
+        ("Taper",    "2013-05-01", "2013-09-30"),
+        ("NBFC",     "2018-09-01", "2019-02-28"),
+        ("COVID",    "2020-02-01", "2020-12-31"),
+    ]
+    for name, s, e in crises:
+        nv = (1 + nifty_only.loc[s:e]).prod() - 1
+        rs = [(1 + r["strategy_return"].loc[s:e]).prod() - 1 for _, r in runs]
+        print(f"  {name:<9} | {s} to {e[:7]} | {nv*100:>+6.1f}% | "
+              f"{rs[0]*100:>+7.1f}% | {rs[1]*100:>+7.1f}% | {rs[2]*100:>+7.1f}%")
 
-    print(f"\n--- 2026 Signal Detail (100 DMA) ---")
-    detail = data.loc[TEST_START:TEST_END].copy()
-    detail["oil_10d"]  = detail["CL=F"].pct_change(10) * 100
-    detail["inr_10d"]  = detail["INR=X"].pct_change(10) * 100
-    detail["vix_10d"]  = detail["^INDIAVIX"].pct_change(10) * 100
-    detail["vix_lvl"]  = detail["^INDIAVIX"]
-    detail["nifty"]    = detail["^NSEI"].round(0)
-    detail["position"] = test_results["position"]
-    detail["nifty_ret"]= (test_results["nifty_return"] * 100).round(2)
-
-    print(detail[["nifty","nifty_ret","oil_10d","inr_10d","vix_10d","vix_lvl","position"]]
-          .round(2).to_string())
+    print()
 
 
 if __name__ == "__main__":

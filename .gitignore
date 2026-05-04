@@ -152,3 +152,7 @@ data/
 
 # Images / charts (regenerate from strategy.py)
 # images/
+
+# Personal artifacts (not part of the project)
+Neil_Kapadia_Resume_v*.docx
+Neil_Kapadia_Resume_v*.pdf
