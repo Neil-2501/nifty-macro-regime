@@ -1,23 +1,37 @@
 """
-Modular Macro Strategy Framework — Indian Markets (canonical, v1.1)
+Modular Macro Strategy Framework — Indian Markets (canonical, v1.2)
 
-Production config: Config 2 — gold rotation during stress flat, panic-short
-retained for COVID-style regimes, RBI repo rate cash yield on fully-flat days.
+Production config: Config 4 — momentum-gated gold rotation during stress flat,
+panic-short retained for COVID-style regimes, RBI repo rate (minus 100bps
+haircut) credited as cash yield on fully-flat days.
 
-Two other configs are run for comparison:
+Three other configs are run for comparison:
   Config 1 — no gold rotation (cash on every flat day, panic-short retained)
+  Config 2 — gold throughout entire stress-flat latch (v1.1.1 production)
   Config 3 — gold replaces panic short (rotation instead of active short)
+
+Key v1.2 changes vs v1.1.1:
+  - Gold rotation now uses a per-latch momentum state machine (Config 4):
+    enter gold at latch start only if gold 10d momentum > 0; exit if
+    momentum turns negative; once exited mid-latch, stay in cash for the
+    rest of the latch. Addresses the 2026 OOS failure where gold was held
+    through an 11% decline because Config 2 had no exit-side risk control.
+  - Cash yield assumes a 100 bps haircut on RBI repo rate by default.
+    Models liquid-fund spread (~50 bps) + TER (~10-25 bps) + auto-sweep
+    frictions. Set cash_yield_haircut_bps=0 to recover v1.1.1 "full repo".
 
 Architecture:
   - Three-lane signal combiner (entry / exit / short) with regime-filter gate
   - Dual-asset positions: nifty_position + gold_position emitted by combiner
   - Per-asset transaction costs (NIFTY 3 bps, gold 5 bps, cash sweep 0 bps)
-  - Time-varying RBI repo rate credited on fully-flat days (sourced from
-    RBI MPC press releases, hardcoded as RBI_REPO_RATE_HISTORY step function)
+  - Time-varying RBI repo rate (minus 100bps haircut) credited on fully-flat
+    days (sourced from RBI MPC press releases, hardcoded as
+    RBI_REPO_RATE_HISTORY step function)
   - Gold instrument: GOLDBEES.NS (NSE-listed gold ETF, INR-denominated).
     Series begins 2009-01-02; pre-2009 stress-flat days remain in cash.
 
-v1.0 (no gold, no cash yield) is preserved in git history at commit c2860fc.
+v1.0 (no gold, no cash yield) preserved in git history at commit c2860fc.
+v1.1.1 (Config 2, full repo) preserved at commit 078878a.
 """
 
 import sys
@@ -98,7 +112,10 @@ class SignalCombiner:
 
     def __init__(self, regime_filter=None, reentry_momentum_threshold=0.005,
                  rotate_to_gold_on_stress_flat=False,
-                 rotate_to_gold_on_panic_short=False):
+                 rotate_to_gold_on_panic_short=False,
+                 rotate_with_momentum=False,
+                 gold_momentum_window=10,
+                 gold_target="GOLDBEES.NS"):
         self.entry_signals = []
         self.exit_signals = []
         self.short_signals = []
@@ -106,6 +123,13 @@ class SignalCombiner:
         self.reentry_momentum_threshold = reentry_momentum_threshold
         self.rotate_to_gold_on_stress_flat = rotate_to_gold_on_stress_flat
         self.rotate_to_gold_on_panic_short = rotate_to_gold_on_panic_short
+        # v1.2 momentum-gated gold rotation:
+        # When True, gold is held within a stress-flat latch only while gold
+        # 10-day momentum is positive. Once exited mid-latch, stays in cash for
+        # the rest of that latch. Re-entry only allowed in a NEW latch.
+        self.rotate_with_momentum = rotate_with_momentum
+        self.gold_momentum_window = gold_momentum_window
+        self.gold_target = gold_target
 
     def add_entry(self, signal, weight=1.0):
         self.entry_signals.append((signal, weight)); return self
@@ -211,8 +235,67 @@ class SignalCombiner:
 
         # Config 2 leg: gold during stress flat
         if self.rotate_to_gold_on_stress_flat:
-            rotate_mask = stress_flat_mask & (nifty_position == 0.0)
-            gold_position[rotate_mask] = 1.0
+            if self.rotate_with_momentum:
+                # ── v1.2 momentum-gated rotation ──────────────────────────
+                # Per-latch state machine:
+                #   - on latch start: enter gold ONLY if gold 10d return > 0
+                #   - within latch: exit gold if gold 10d return turns negative
+                #   - once exited mid-latch: stay in cash until latch ends
+                #   - latch end → reset state, no gold
+                if self.gold_target in data.columns:
+                    gold_10d = data[self.gold_target].pct_change(self.gold_momentum_window)
+                else:
+                    gold_10d = pd.Series(np.nan, index=idx)
+
+                stress_vals  = stress_flat_mask.values
+                nifty_vals   = nifty_position.values
+                gold_10d_vals = gold_10d.values
+                gp = np.zeros(n)
+
+                in_latch = False
+                in_gold = False
+                exited_gold_this_latch = False
+
+                for i in range(n):
+                    is_stress_flat_day = stress_vals[i] and (nifty_vals[i] == 0.0)
+                    if is_stress_flat_day:
+                        if not in_latch:
+                            # Latch starting — entry decision
+                            in_latch = True
+                            exited_gold_this_latch = False
+                            g10 = gold_10d_vals[i]
+                            if not np.isnan(g10) and g10 > 0:
+                                in_gold = True
+                                gp[i] = 1.0
+                            else:
+                                in_gold = False
+                                # gp[i] stays 0
+                        else:
+                            # Continuing latch
+                            if in_gold:
+                                g10 = gold_10d_vals[i]
+                                if not np.isnan(g10) and g10 < 0:
+                                    # Gold momentum turned negative — exit
+                                    in_gold = False
+                                    exited_gold_this_latch = True
+                            if in_gold:
+                                gp[i] = 1.0
+                            # else: gp[i] stays 0 (in cash for rest of latch)
+                    elif not stress_vals[i]:
+                        # Latch ending — reset state
+                        if in_latch:
+                            in_latch = False
+                            in_gold = False
+                            exited_gold_this_latch = False
+                        # gp[i] stays 0
+                    # else: stress_flat_mask=True but nifty_pos != 0 (panic short
+                    #   inside latch). Preserve state, no gold (already 0).
+
+                gold_position = pd.Series(gp, index=idx)
+            else:
+                # Original Config 2 logic — gold throughout entire latch
+                rotate_mask = stress_flat_mask & (nifty_position == 0.0)
+                gold_position[rotate_mask] = 1.0
 
         # Config 3 leg: gold replaces panic short
         if self.rotate_to_gold_on_panic_short:
@@ -288,7 +371,8 @@ class MacroStrategy:
     def __init__(self, combiner, target="^NSEI", gold_target="GOLDBEES.NS",
                  nifty_cost_bps=3, gold_cost_bps=5,
                  cash_cost_bps=0,
-                 use_cash_yield=True):
+                 use_cash_yield=True,
+                 cash_yield_haircut_bps=100):
         self.combiner = combiner
         self.target = target
         self.gold_target = gold_target
@@ -296,6 +380,11 @@ class MacroStrategy:
         self.gold_cost_bps  = gold_cost_bps
         self.cash_cost_bps  = cash_cost_bps   # bps to enter/exit cash sweep (default 0)
         self.use_cash_yield = use_cash_yield  # toggle cash yield on/off for sensitivity
+        # v1.2: applied to RBI repo rate on flat days. Models the spread
+        # between repo and what a liquid fund actually earns net of TER and
+        # institutional auto-sweep frictions. Default 100bps reflects realistic
+        # institutional execution. Set to 0 for the v1.1.1 "full repo" assumption.
+        self.cash_yield_haircut_bps = cash_yield_haircut_bps
 
     def run(self, data):
         nifty_returns = data[self.target].pct_change().rename("nifty_return")
@@ -325,11 +414,13 @@ class MacroStrategy:
         gold_pnl  = gold_pos.shift(1)  * gold_returns  - gold_cost
 
         # Cash yield on fully-flat days (no NIFTY exposure, no gold exposure)
-        # Yield rate = RBI repo rate (time-varying, daily step function)
+        # Yield rate = RBI repo rate minus haircut (time-varying daily step function).
+        # Default haircut 100bps models liquid-fund spread + TER + sweep frictions.
         cash_position = ((nifty_pos == 0.0) & (gold_pos == 0.0)).astype(float)
         if self.use_cash_yield:
             repo_rate = build_rbi_repo_rate_series(data.index)
-            daily_cash_yield = repo_rate / 252
+            haircut_repo = (repo_rate - self.cash_yield_haircut_bps / 10000).clip(lower=0)
+            daily_cash_yield = haircut_repo / 252
             cash_pnl = cash_position.shift(1) * daily_cash_yield
         else:
             cash_pnl = pd.Series(0.0, index=data.index)
@@ -388,11 +479,12 @@ def position_breakdown(res):
             "total": int(long_n + short_n + long_g + flat)}
 
 
-def make_combiner(rotate_stress=False, rotate_panic=False):
+def make_combiner(rotate_stress=False, rotate_panic=False, use_momentum_gold=False):
     rf = RegimeFilter(window=100)
     c = SignalCombiner(regime_filter=rf,
                        rotate_to_gold_on_stress_flat=rotate_stress,
-                       rotate_to_gold_on_panic_short=rotate_panic)
+                       rotate_to_gold_on_panic_short=rotate_panic,
+                       rotate_with_momentum=use_momentum_gold)
     c.add_entry(USDINRSignal(window=10, threshold=0.01), weight=1.5)
     c.add_entry(IndiaVIXSignal(window=10, threshold=0.20), weight=1.5)
     c.add_exit(SupplyShockSignal(window=10, oil_threshold=0.03,
@@ -432,11 +524,13 @@ def main():
         print(f"\nGOLDBEES.NS data starts: {gold_first.date() if gold_first else 'NONE'}",
               file=sys.stderr)
 
-    # Run all three configs
+    # Run all four configs. Config 4 (momentum-gated gold) is v1.2 production.
+    # All configs use cash_yield_haircut_bps=100 by default (Option D).
     configs = [
-        ("Config 1 (no gold)",       make_combiner(False, False)),
-        ("Config 2 (gold flat)",     make_combiner(True,  False)),
-        ("Config 3 (gold all)",      make_combiner(True,  True)),
+        ("Config 1 (no gold)",                make_combiner(False, False)),
+        ("Config 2 (gold flat)",              make_combiner(True,  False)),
+        ("Config 3 (gold all)",               make_combiner(True,  True)),
+        ("Config 4 (gold momentum, PROD)",    make_combiner(True,  False, use_momentum_gold=True)),
     ]
 
     runs = []
@@ -457,15 +551,17 @@ def main():
     bd1 = position_breakdown(runs[0][1])
     bd2 = position_breakdown(runs[1][1])
     bd3 = position_breakdown(runs[2][1])
+    bd4 = position_breakdown(runs[3][1])
     print()
     print(f"  Days long gold > 0 in Config 2:  {bd2['long_gold'] > 0}  ({bd2['long_gold']})")
     print(f"  Days short NIFTY = 0 in Config 3: {bd3['short_nifty'] == 0}  ({bd3['short_nifty']})")
     print(f"  Days short NIFTY > 0 in Config 1: {bd1['short_nifty'] > 0}  ({bd1['short_nifty']})")
     print(f"  Days short NIFTY > 0 in Config 2: {bd2['short_nifty'] > 0}  ({bd2['short_nifty']})")
+    print(f"  Days long gold in Config 4 (momentum-gated): {bd4['long_gold']} (vs Config 2's {bd2['long_gold']})")
 
     # ── Comparison Table ──────────────────────────────────────────────────
     print("\n\nCONFIGURATION COMPARISON — 2008-2025, base costs (NIFTY 3 bps, gold 5 bps)")
-    print("=" * 76)
+    print("=" * 88)
     m = [metrics(r["strategy_return"]) for _, r in runs]
     bds = [position_breakdown(r) for _, r in runs]
 
@@ -486,20 +582,20 @@ def main():
         ("Days long gold",      [f"{b['long_gold']:>8d}"    for b in bds]),
         ("Days flat",           [f"{b['flat']:>8d}"         for b in bds]),
     ]
-    hdr = f"  {'Metric':<20}| {'Config 1':>10} | {'Config 2':>10} | {'Config 3':>10}"
-    sub = f"  {'':<20}| {'(no gold)':>10} | {'(gold flat)':>10} | {'(gold all)':>10}"
+    hdr = f"  {'Metric':<20}| {'Config 1':>10} | {'Config 2':>10} | {'Config 3':>10} | {'Config 4':>10}"
+    sub = f"  {'':<20}| {'(no gold)':>10} | {'(gold flat)':>10} | {'(gold all)':>10} | {'(momentum)':>10}"
     print(hdr)
     print(sub)
-    print("  " + "-" * 20 + "+" + "-" * 12 + "+" + "-" * 12 + "+" + "-" * 11)
+    print("  " + "-" * 20 + "+" + ("-" * 12 + "+") * 3 + "-" * 12)
     for label, vals in rows:
-        print(f"  {label:<20}| {vals[0]:>10} | {vals[1]:>10} | {vals[2]:>10}")
+        print(f"  {label:<20}| {vals[0]:>10} | {vals[1]:>10} | {vals[2]:>10} | {vals[3]:>10}")
     print(f"\n  (Reference) NIFTY B&H Sharpe={m_nifty['sharpe']:.2f}, "
           f"CAGR={m_nifty['cagr']*100:.2f}%, MaxDD={m_nifty['max_dd']*100:.1f}%")
 
     # ── Year-by-year ──────────────────────────────────────────────────────
     print("\n\nYEAR-BY-YEAR RETURNS (%)")
-    print("  Year |   NIFTY | Config 1 | Config 2 | Config 3")
-    print("  -----+---------+----------+----------+---------")
+    print("  Year |   NIFTY | Config 1 | Config 2 | Config 3 | Config 4")
+    print("  -----+---------+----------+----------+----------+---------")
     annual_n = (1 + nifty_only).resample("YE").prod() - 1
     annuals = [(1 + r["strategy_return"]).resample("YE").prod() - 1 for _, r in runs]
     for ts in annual_n.index:
@@ -508,23 +604,25 @@ def main():
         c1 = annuals[0].loc[ts] * 100
         c2 = annuals[1].loc[ts] * 100
         c3 = annuals[2].loc[ts] * 100
-        print(f"  {yr} | {nv:>+6.1f}% | {c1:>+7.1f}% | {c2:>+7.1f}% | {c3:>+7.1f}%")
+        c4 = annuals[3].loc[ts] * 100
+        print(f"  {yr} | {nv:>+6.1f}% | {c1:>+7.1f}% | {c2:>+7.1f}% | {c3:>+7.1f}% | {c4:>+7.1f}%")
 
     # ── Crisis windows ────────────────────────────────────────────────────
     print("\n\nCRISIS WINDOWS")
-    print("  Crisis    | Window           |   NIFTY | Config 1 | Config 2 | Config 3")
-    print("  ----------+------------------+---------+----------+----------+---------")
+    print("  Crisis        | Window           |   NIFTY | Config 1 | Config 2 | Config 3 | Config 4")
+    print("  --------------+------------------+---------+----------+----------+----------+---------")
     crises = [
-        ("GFC",      "2008-09-01", "2009-03-31"),
-        ("Taper",    "2013-05-01", "2013-09-30"),
-        ("NBFC",     "2018-09-01", "2019-02-28"),
-        ("COVID",    "2020-02-01", "2020-12-31"),
+        ("GFC",            "2008-09-01", "2009-03-31"),
+        ("Euro debt 2011", "2011-07-01", "2011-12-31"),
+        ("Taper 2013",     "2013-05-01", "2013-09-30"),
+        ("NBFC 2018",      "2018-09-01", "2019-02-28"),
+        ("COVID 2020",     "2020-02-01", "2020-12-31"),
     ]
     for name, s, e in crises:
         nv = (1 + nifty_only.loc[s:e]).prod() - 1
         rs = [(1 + r["strategy_return"].loc[s:e]).prod() - 1 for _, r in runs]
-        print(f"  {name:<9} | {s} to {e[:7]} | {nv*100:>+6.1f}% | "
-              f"{rs[0]*100:>+7.1f}% | {rs[1]*100:>+7.1f}% | {rs[2]*100:>+7.1f}%")
+        print(f"  {name:<13} | {s} to {e[:7]} | {nv*100:>+6.1f}% | "
+              f"{rs[0]*100:>+7.1f}% | {rs[1]*100:>+7.1f}% | {rs[2]*100:>+7.1f}% | {rs[3]*100:>+7.1f}%")
 
     print()
 

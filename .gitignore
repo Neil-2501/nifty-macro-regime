@@ -156,3 +156,9 @@ data/
 # Personal artifacts (not part of the project)
 Neil_Kapadia_Resume_v*.docx
 Neil_Kapadia_Resume_v*.pdf
+
+# v1.2 diagnostic scripts and outputs (local only)
+test_config4_oos.py
+oos_2026_check.py
+v12_full_output.txt
+v12_oos_2026_output.txt

@@ -1,9 +1,10 @@
 """
 make_plots.py — generate publication-quality plots for the README.
 
-Runs the production v1.1 Config 2 strategy (gold rotation during stress flat,
-panic-short retained, RBI repo rate cash yield on fully-flat days).
-Imports from strategy.py rather than duplicating logic.
+Runs the production v1.2 Config 4 strategy (momentum-gated gold rotation
+during stress flat, panic-short retained, RBI repo rate minus 100bps haircut
+credited on fully-flat days). Imports from strategy.py rather than duplicating
+logic.
 
 Produces:
   images/equity_curve.png
@@ -34,14 +35,16 @@ from strategy import (
 
 
 # ---------------------------------------------------------------------------
-# run_backtest() — runs Config 2 production
+# run_backtest() — runs Config 4 production (v1.2)
 # ---------------------------------------------------------------------------
 
 def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
-                 use_cash_yield: bool = True) -> dict:
+                 use_cash_yield: bool = True,
+                 cash_yield_haircut_bps: float = 100) -> dict:
     """
-    Downloads data, runs Config 2 (gold rotation on stress flat, panic-short
-    retained, cash yield on flat days), returns all series needed for plots.
+    Downloads data, runs Config 4 (momentum-gated gold rotation on stress
+    flat, panic-short retained, repo - haircut on flat days), returns all
+    series needed for plots.
     """
     WARMUP   = "2006-01-01"
     START    = "2008-04-01"
@@ -63,13 +66,15 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
             mask = raw.index >= first_valid
             raw.loc[mask, "GOLDBEES.NS"] = raw.loc[mask, "GOLDBEES.NS"].ffill()
 
-    # Config 2: rotate_to_gold_on_stress_flat=True, rotate_to_gold_on_panic_short=False
-    combiner = make_combiner(rotate_stress=True, rotate_panic=False)
+    # Config 4 (v1.2 production): momentum-gated gold rotation, repo-haircut cash yield
+    combiner = make_combiner(rotate_stress=True, rotate_panic=False,
+                             use_momentum_gold=True)
     strategy = MacroStrategy(
         combiner,
         nifty_cost_bps=nifty_cost_bps,
         gold_cost_bps=gold_cost_bps,
         use_cash_yield=use_cash_yield,
+        cash_yield_haircut_bps=cash_yield_haircut_bps,
     )
 
     res = strategy.run(raw).loc[START:END].copy()
@@ -134,7 +139,7 @@ def _base_ax(ax):
 def plot_equity_curve(bt, out_path):
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     ax.plot(bt["dates"], bt["strategy_cum"],
-            color=BLUE, linewidth=1.5, label="Strategy v1.1 (net 3/5 bps)", zorder=3)
+            color=BLUE, linewidth=1.5, label="Strategy v1.2 (3/5 bps + repo-100bps)", zorder=3)
     ax.plot(bt["dates"], bt["nifty_cum"],
             color=GRAY, linewidth=1.5, label="NIFTY 50 Buy & Hold", zorder=2)
     ax.set_yscale("log")
@@ -147,7 +152,7 @@ def plot_equity_curve(bt, out_path):
     ax.yaxis.grid(True, which="major", linestyle="-", linewidth=0.5, alpha=0.3)
     ax.xaxis.grid(False)
     ax.set_ylabel("Cumulative return (x)")
-    ax.set_title("Cumulative Returns — Strategy v1.1 (gold rotation + cash yield) vs NIFTY 50 (2008-2025)",
+    ax.set_title("Cumulative Returns — Strategy v1.2 (momentum gold rotation + repo-haircut cash yield) vs NIFTY 50 (2008-2025)",
                  fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
@@ -175,7 +180,7 @@ def plot_drawdown(bt, out_path):
 
     ax.fill_between(dates, sdd, 0, color=BLUE, alpha=0.35, zorder=2)
     ax.plot(dates, sdd, color=BLUE, linewidth=1.2,
-            label="Strategy v1.1", zorder=3)
+            label="Strategy v1.2", zorder=3)
 
     ax.fill_between(dates, ndd, 0, color=GRAY, alpha=0.25, zorder=1)
     ax.plot(dates, ndd, color=GRAY, linewidth=1.2,
@@ -194,7 +199,7 @@ def plot_drawdown(bt, out_path):
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
     ax.set_ylabel("Drawdown")
-    ax.set_title("Drawdown — Strategy v1.1 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
+    ax.set_title("Drawdown — Strategy v1.2 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     fig.tight_layout()
@@ -223,7 +228,7 @@ def plot_yearly_returns(bt, out_path):
     n_plot = np.where(np.abs(n_ret) < MIN_VIS, np.sign(n_ret + 1e-9) * MIN_VIS, n_ret)
 
     fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
-    ax.bar(x - width / 2, s_plot, width, label="Strategy v1.1",
+    ax.bar(x - width / 2, s_plot, width, label="Strategy v1.2",
            color=BLUE, zorder=3)
     ax.bar(x + width / 2, n_plot, width, label="NIFTY 50 Buy & Hold",
            color=GRAY, zorder=3)
@@ -233,7 +238,7 @@ def plot_yearly_returns(bt, out_path):
     ax.set_xticklabels(years, rotation=45, ha="right", fontsize=8)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax.set_ylabel("Annual return (%)")
-    ax.set_title("Annual Returns — Strategy v1.1 vs NIFTY 50", fontsize=11, pad=10)
+    ax.set_title("Annual Returns — Strategy v1.2 vs NIFTY 50", fontsize=11, pad=10)
     ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     ax.grid(axis="x", visible=False)
@@ -257,7 +262,7 @@ def write_summary_csv(sm, nm, csv_path):
         ("calmar",                  round(sm["calmar"],       2),  round(nm["calmar"],       2)),
         ("ann_vol_pct",             round(sm["vol"]    * 100, 2),  round(nm["vol"]    * 100, 2)),
     ]
-    df = pd.DataFrame(rows, columns=["metric", "strategy_v11_config2", "nifty_buy_hold"])
+    df = pd.DataFrame(rows, columns=["metric", "strategy_v12_config4", "nifty_buy_hold"])
     df.to_csv(csv_path, index=False)
     print(f"  Saved {csv_path}")
     return df
@@ -275,25 +280,25 @@ if __name__ == "__main__":
     sm, nm = compute_full_metrics(bt["res"])
     bd = position_breakdown(bt["res"])
 
-    print("\n--- Headline metrics (v1.1 Config 2: gold rotation + cash yield, 3/5 bps) ---")
-    print(f"  Cumulative return : {sm['total']*100:.1f}%  (README: 908.4%)")
-    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (README: 13.40%)")
-    print(f"  Sharpe            : {sm['sharpe']:.2f}    (README: 0.55)")
-    print(f"  Sortino           : {sm['sortino']:.2f}    (README: 0.67)")
-    print(f"  Calmar            : {sm['calmar']:.2f}    (README: 0.73)")
-    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (README: -18.3%)")
-    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (README: 13.55%)")
+    print("\n--- Headline metrics (v1.2 Config 4: momentum-gated gold + repo-100bps haircut) ---")
+    print(f"  Cumulative return : {sm['total']*100:.1f}%  (expected ~785%)")
+    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (expected ~12.59%)")
+    print(f"  Sharpe            : {sm['sharpe']:.2f}    (expected ~0.50)")
+    print(f"  Sortino           : {sm['sortino']:.2f}    (expected ~0.59)")
+    print(f"  Calmar            : {sm['calmar']:.2f}    (expected ~0.77)")
+    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (expected ~-16.4%)")
+    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (expected ~13.48%)")
 
     print(f"\n  Position breakdown: long_nifty={bd['long_nifty']}  "
           f"short_nifty={bd['short_nifty']}  long_gold={bd['long_gold']}  "
           f"flat={bd['flat']}  total={bd['total']}")
 
-    # Tolerance check
+    # Tolerance check — v1.2 expected values
     checks = [
-        ("Cumulative return", sm["total"]*100, 908.4, 2.0),
-        ("CAGR",              sm["cagr"]*100,  13.40, 0.05),
-        ("Sharpe",            sm["sharpe"],     0.55, 0.02),
-        ("Max drawdown",      sm["max_dd"]*100,-18.3, 0.5),
+        ("Cumulative return", sm["total"]*100, 784.6, 2.0),
+        ("CAGR",              sm["cagr"]*100,  12.59, 0.05),
+        ("Sharpe",            sm["sharpe"],     0.50, 0.02),
+        ("Max drawdown",      sm["max_dd"]*100,-16.4, 0.5),
     ]
     ok = True
     for label, got, expected, tol in checks:
