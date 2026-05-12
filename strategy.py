@@ -372,22 +372,34 @@ class MacroStrategy:
                  nifty_cost_bps=3, gold_cost_bps=5,
                  cash_cost_bps=0,
                  use_cash_yield=True,
-                 cash_yield_haircut_bps=100):
+                 cash_yield_haircut_bps=100,
+                 long_target="^NSEI",
+                 long_cost_bps=3):
         self.combiner = combiner
-        self.target = target
+        self.target = target          # ^NSEI — used for signals, regime filter, SHORT positions
         self.gold_target = gold_target
-        self.nifty_cost_bps = nifty_cost_bps
+        self.nifty_cost_bps = nifty_cost_bps   # cost for short-side (^NSEI futures)
         self.gold_cost_bps  = gold_cost_bps
-        self.cash_cost_bps  = cash_cost_bps   # bps to enter/exit cash sweep (default 0)
-        self.use_cash_yield = use_cash_yield  # toggle cash yield on/off for sensitivity
-        # v1.2: applied to RBI repo rate on flat days. Models the spread
-        # between repo and what a liquid fund actually earns net of TER and
-        # institutional auto-sweep frictions. Default 100bps reflects realistic
-        # institutional execution. Set to 0 for the v1.1.1 "full repo" assumption.
+        self.cash_cost_bps  = cash_cost_bps    # bps to enter/exit cash sweep (default 0)
+        self.use_cash_yield = use_cash_yield
         self.cash_yield_haircut_bps = cash_yield_haircut_bps
+        # v1.3: asset held when long. Defaults to ^NSEI (backward-compatible with
+        # v1.1 / v1.2). Configs 5/6 override with NIFTYMIDCAP150 / NIFTYMOM30
+        # to capture higher-alpha index exposure on the long side. SHORT positions
+        # still use ^NSEI (more liquid for futures-based shorting in practice).
+        self.long_target = long_target
+        self.long_cost_bps = long_cost_bps
 
     def run(self, data):
+        # Benchmark/short-side return: always ^NSEI
         nifty_returns = data[self.target].pct_change().rename("nifty_return")
+        # Long-side return: the asset HELD when long (defaults to ^NSEI; v1.3
+        # Configs 5/6 override to higher-alpha indices).
+        if self.long_target in data.columns:
+            long_returns = data[self.long_target].pct_change().fillna(0.0)
+        else:
+            long_returns = nifty_returns.fillna(0.0)
+
         # Gold returns: zero where data is missing (pre-2009 for GOLDBEES.NS)
         if self.gold_target in data.columns:
             gold_raw = data[self.gold_target]
@@ -406,12 +418,19 @@ class MacroStrategy:
         # Mask out gold position when no data available (forced flat)
         gold_pos = gold_pos.where(gold_available, 0.0)
 
-        # Per-asset costs
-        nifty_cost = nifty_pos.diff().abs() * (self.nifty_cost_bps / 10000)
+        # v1.3: separate long and short accounting so they can use different
+        # underlying assets (long_target vs ^NSEI) and different cost rates.
+        long_pos  = (nifty_pos ==  1.0).astype(float)
+        short_pos = (nifty_pos == -1.0).astype(float)
+
+        long_cost  = long_pos.diff().abs()  * (self.long_cost_bps  / 10000)
+        short_cost = short_pos.diff().abs() * (self.nifty_cost_bps / 10000)
         gold_cost  = gold_pos.diff().abs()  * (self.gold_cost_bps  / 10000)
 
-        nifty_pnl = nifty_pos.shift(1) * nifty_returns - nifty_cost
-        gold_pnl  = gold_pos.shift(1)  * gold_returns  - gold_cost
+        long_pnl  =  long_pos.shift(1)  * long_returns
+        short_pnl = -short_pos.shift(1) * nifty_returns   # short uses ^NSEI
+        nifty_pnl = long_pnl + short_pnl - long_cost - short_cost
+        gold_pnl  = gold_pos.shift(1) * gold_returns - gold_cost
 
         # Cash yield on fully-flat days (no NIFTY exposure, no gold exposure)
         # Yield rate = RBI repo rate minus haircut (time-varying daily step function).
@@ -449,6 +468,16 @@ class MacroStrategy:
 # ---------------------------------------------------------------------------
 
 RF = 0.06
+
+def load_nse_index_csv(path, col_name):
+    """Load NSE Indices historical CSV (from niftyindices.com export).
+    Returns a Series of CLOSE_INDEX_VAL indexed by trading date.
+    Format: INDEX_NAME, OPEN_INDEX_VAL, HIGH_INDEX_VAL, CLOSE_INDEX_VAL, ..., TIMESTAMP."""
+    df = pd.read_csv(path)
+    df["TIMESTAMP"] = pd.to_datetime(df["TIMESTAMP"])
+    df = df.set_index("TIMESTAMP").sort_index()
+    return df["CLOSE_INDEX_VAL"].astype(float).rename(col_name)
+
 
 def metrics(ret_series):
     r = ret_series.dropna()
@@ -505,7 +534,7 @@ def main():
     TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS"]
 
     print("Downloading data ...", file=sys.stderr)
-    raw = yf.download(TICKERS, start=WARMUP, end="2026-01-01",
+    raw = yf.download(TICKERS, start=WARMUP, end="2026-05-12",
                       auto_adjust=True, progress=False)["Close"]
     raw.dropna(how="all", inplace=True)
     # NOTE: do NOT ffill GOLDBEES.NS pre-2010 (no data → gold position must stay flat)
@@ -524,18 +553,36 @@ def main():
         print(f"\nGOLDBEES.NS data starts: {gold_first.date() if gold_first else 'NONE'}",
               file=sys.stderr)
 
-    # Run all four configs. Config 4 (momentum-gated gold) is v1.2 production.
-    # All configs use cash_yield_haircut_bps=100 by default (Option D).
+    # v1.3: load NSE CSV data for higher-alpha index substitution
+    try:
+        midcap150 = load_nse_index_csv("data/midcap150_history.csv", "NIFTYMIDCAP150")
+        mom30     = load_nse_index_csv("data/momentum30_history.csv", "NIFTYMOM30")
+        raw["NIFTYMIDCAP150"] = midcap150.reindex(raw.index).ffill()
+        raw["NIFTYMOM30"]     = mom30.reindex(raw.index).ffill()
+        print(f"NIFTYMIDCAP150 first valid: {raw['NIFTYMIDCAP150'].first_valid_index().date()}",
+              file=sys.stderr)
+        print(f"NIFTYMOM30 first valid:     {raw['NIFTYMOM30'].first_valid_index().date()}",
+              file=sys.stderr)
+    except FileNotFoundError as e:
+        print(f"WARNING: NSE CSV missing — Configs 5/6 will be skipped. ({e})", file=sys.stderr)
+
+    # v1.3: configs list with optional MacroStrategy kwargs as 3rd tuple element.
+    # Configs 1-4 use defaults (long_target="^NSEI", long_cost_bps=3) — backward compatible.
+    # Configs 5-6 substitute the long-side asset to capture higher-alpha bull-regime exposure.
     configs = [
-        ("Config 1 (no gold)",                make_combiner(False, False)),
-        ("Config 2 (gold flat)",              make_combiner(True,  False)),
-        ("Config 3 (gold all)",               make_combiner(True,  True)),
-        ("Config 4 (gold momentum, PROD)",    make_combiner(True,  False, use_momentum_gold=True)),
+        ("Config 1 (no gold)",                make_combiner(False, False),                          {}),
+        ("Config 2 (gold flat)",              make_combiner(True,  False),                          {}),
+        ("Config 3 (gold all)",               make_combiner(True,  True),                           {}),
+        ("Config 4 (gold momentum)",          make_combiner(True,  False, use_momentum_gold=True),  {}),
+        ("Config 5 (v1.3 Midcap 150)",        make_combiner(True,  False, use_momentum_gold=True),
+            {"long_target": "NIFTYMIDCAP150", "long_cost_bps": 6}),
+        ("Config 6 (v1.3 Momentum 30)",       make_combiner(True,  False, use_momentum_gold=True),
+            {"long_target": "NIFTYMOM30",     "long_cost_bps": 6}),
     ]
 
     runs = []
-    for label, combiner in configs:
-        s = MacroStrategy(combiner, nifty_cost_bps=3, gold_cost_bps=5)
+    for label, combiner, kwargs in configs:
+        s = MacroStrategy(combiner, nifty_cost_bps=3, gold_cost_bps=5, **kwargs)
         r = s.run(raw).loc[START:END].copy()
         runs.append((label, r))
 
@@ -547,28 +594,29 @@ def main():
         check = "OK" if bd["total"] == len(r) else f"FAIL (sum {bd['total']} != {len(r)})"
         print(f"  {label}: {bd}  [days sum: {check}]")
 
-    # Specific assertions
-    bd1 = position_breakdown(runs[0][1])
-    bd2 = position_breakdown(runs[1][1])
-    bd3 = position_breakdown(runs[2][1])
+    # Specific assertions — Configs 4/5/6 share the same signals so long-day
+    # counts should be identical (only the underlying asset held differs).
     bd4 = position_breakdown(runs[3][1])
+    bd5 = position_breakdown(runs[4][1]) if len(runs) > 4 else None
+    bd6 = position_breakdown(runs[5][1]) if len(runs) > 5 else None
     print()
-    print(f"  Days long gold > 0 in Config 2:  {bd2['long_gold'] > 0}  ({bd2['long_gold']})")
-    print(f"  Days short NIFTY = 0 in Config 3: {bd3['short_nifty'] == 0}  ({bd3['short_nifty']})")
-    print(f"  Days short NIFTY > 0 in Config 1: {bd1['short_nifty'] > 0}  ({bd1['short_nifty']})")
-    print(f"  Days short NIFTY > 0 in Config 2: {bd2['short_nifty'] > 0}  ({bd2['short_nifty']})")
-    print(f"  Days long gold in Config 4 (momentum-gated): {bd4['long_gold']} (vs Config 2's {bd2['long_gold']})")
+    print(f"  Cfg4 long days (^NSEI):      {bd4['long_nifty']}")
+    print(f"  Cfg5 long days (Midcap 150): {bd5['long_nifty'] if bd5 else 'N/A'}")
+    print(f"  Cfg6 long days (Momentum 30): {bd6['long_nifty'] if bd6 else 'N/A'}")
+    match = bd5 and bd6 and bd4['long_nifty'] == bd5['long_nifty'] == bd6['long_nifty']
+    print(f"  Long-day counts match across Cfg 4/5/6: {match}")
 
     # ── Comparison Table ──────────────────────────────────────────────────
-    print("\n\nCONFIGURATION COMPARISON — 2008-2025, base costs (NIFTY 3 bps, gold 5 bps)")
-    print("=" * 88)
+    print(f"\n\nCONFIGURATION COMPARISON — 2008-2025, base costs (NIFTY 3 bps, gold 5 bps, "
+          f"Midcap/Mom30 6 bps)")
+    print("=" * 130)
     m = [metrics(r["strategy_return"]) for _, r in runs]
     bds = [position_breakdown(r) for _, r in runs]
 
-    # NIFTY benchmark for reference
     nifty_only = runs[0][1]["nifty_return"]
     m_nifty = metrics(nifty_only)
 
+    n = len(runs)
     rows = [
         ("Cumulative return",   [f"{x['total']*100:>7.1f}%" for x in m]),
         ("CAGR",                [f"{x['cagr']*100:>7.2f}%"  for x in m]),
@@ -577,40 +625,40 @@ def main():
         ("Calmar",              [f"{x['calmar']:>8.2f}"     for x in m]),
         ("Max drawdown",        [f"{x['max_dd']*100:>7.1f}%" for x in m]),
         ("Annualized vol",      [f"{x['vol']*100:>7.2f}%"   for x in m]),
-        ("Days long NIFTY",     [f"{b['long_nifty']:>8d}"   for b in bds]),
-        ("Days short NIFTY",    [f"{b['short_nifty']:>8d}"  for b in bds]),
+        ("Days long",           [f"{b['long_nifty']:>8d}"   for b in bds]),
+        ("Days short",          [f"{b['short_nifty']:>8d}"  for b in bds]),
         ("Days long gold",      [f"{b['long_gold']:>8d}"    for b in bds]),
         ("Days flat",           [f"{b['flat']:>8d}"         for b in bds]),
     ]
-    hdr = f"  {'Metric':<20}| {'Config 1':>10} | {'Config 2':>10} | {'Config 3':>10} | {'Config 4':>10}"
-    sub = f"  {'':<20}| {'(no gold)':>10} | {'(gold flat)':>10} | {'(gold all)':>10} | {'(momentum)':>10}"
+    headers = ["Cfg1", "Cfg2", "Cfg3", "Cfg4", "Cfg5", "Cfg6"][:n]
+    subs    = ["(no gold)", "(gold flat)", "(gold all)", "(momentum)", "(Midcap150)", "(Mom30)"][:n]
+    hdr = f"  {'Metric':<20}" + "".join(f" | {h:>10}" for h in headers)
+    sub = f"  {'':<20}"        + "".join(f" | {s:>10}" for s in subs)
     print(hdr)
     print(sub)
-    print("  " + "-" * 20 + "+" + ("-" * 12 + "+") * 3 + "-" * 12)
+    print("  " + "-" * 20 + ("+" + "-" * 12) * n)
     for label, vals in rows:
-        print(f"  {label:<20}| {vals[0]:>10} | {vals[1]:>10} | {vals[2]:>10} | {vals[3]:>10}")
+        print(f"  {label:<20}" + "".join(f" | {v:>10}" for v in vals))
     print(f"\n  (Reference) NIFTY B&H Sharpe={m_nifty['sharpe']:.2f}, "
           f"CAGR={m_nifty['cagr']*100:.2f}%, MaxDD={m_nifty['max_dd']*100:.1f}%")
 
     # ── Year-by-year ──────────────────────────────────────────────────────
     print("\n\nYEAR-BY-YEAR RETURNS (%)")
-    print("  Year |   NIFTY | Config 1 | Config 2 | Config 3 | Config 4")
-    print("  -----+---------+----------+----------+----------+---------")
+    yhdr = "  Year |   NIFTY" + "".join(f" | {h:>7}" for h in headers)
+    print(yhdr)
+    print("  -----+---------" + ("+---------" * n))
     annual_n = (1 + nifty_only).resample("YE").prod() - 1
     annuals = [(1 + r["strategy_return"]).resample("YE").prod() - 1 for _, r in runs]
     for ts in annual_n.index:
         yr = ts.year
         nv = annual_n.loc[ts] * 100
-        c1 = annuals[0].loc[ts] * 100
-        c2 = annuals[1].loc[ts] * 100
-        c3 = annuals[2].loc[ts] * 100
-        c4 = annuals[3].loc[ts] * 100
-        print(f"  {yr} | {nv:>+6.1f}% | {c1:>+7.1f}% | {c2:>+7.1f}% | {c3:>+7.1f}% | {c4:>+7.1f}%")
+        vals = [a.loc[ts] * 100 for a in annuals]
+        print(f"  {yr} | {nv:>+6.1f}%" + "".join(f" | {v:>+6.1f}%" for v in vals))
 
     # ── Crisis windows ────────────────────────────────────────────────────
     print("\n\nCRISIS WINDOWS")
-    print("  Crisis        | Window           |   NIFTY | Config 1 | Config 2 | Config 3 | Config 4")
-    print("  --------------+------------------+---------+----------+----------+----------+---------")
+    print("  Crisis        | Window           |   NIFTY" + "".join(f" | {h:>7}" for h in headers))
+    print("  --------------+------------------+---------" + ("+---------" * n))
     crises = [
         ("GFC",            "2008-09-01", "2009-03-31"),
         ("Euro debt 2011", "2011-07-01", "2011-12-31"),
@@ -621,8 +669,9 @@ def main():
     for name, s, e in crises:
         nv = (1 + nifty_only.loc[s:e]).prod() - 1
         rs = [(1 + r["strategy_return"].loc[s:e]).prod() - 1 for _, r in runs]
-        print(f"  {name:<13} | {s} to {e[:7]} | {nv*100:>+6.1f}% | "
-              f"{rs[0]*100:>+7.1f}% | {rs[1]*100:>+7.1f}% | {rs[2]*100:>+7.1f}% | {rs[3]*100:>+7.1f}%")
+        line = f"  {name:<13} | {s} to {e[:7]} | {nv*100:>+6.1f}%"
+        line += "".join(f" | {v*100:>+6.1f}%" for v in rs)
+        print(line)
 
     print()
 

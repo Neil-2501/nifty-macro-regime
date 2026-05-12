@@ -143,7 +143,10 @@ cython_debug/
 
 # ── Project-specific ──────────────────────────────────────────────────────────
 # Vendor / downloaded market data (may contain licensed data)
-data/
+data/*
+# Exceptions: v1.3 production NSE index CSVs (from niftyindices.com via nselib)
+!data/midcap150_history.csv
+!data/momentum30_history.csv
 
 # Results exports (regenerate from strategy.py)
 # results/ is tracked except the summary CSV stub — comment this out if you
@@ -162,3 +165,10 @@ test_config4_oos.py
 oos_2026_check.py
 v12_full_output.txt
 v12_oos_2026_output.txt
+
+# v1.3 diagnostic scripts and outputs (local only)
+generate_v13_numbers.py
+pull_nse_history.py
+test_v13_oos_and_costs.py
+verify_index_data.py
+v13_full_output.txt
