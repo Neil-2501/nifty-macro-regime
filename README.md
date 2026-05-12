@@ -1,6 +1,6 @@
 # Indian Equity Macro-Regime Strategy
 
-A systematic macro-regime strategy for Indian markets combining tactical long exposure to NIFTY 200 Momentum 30 in bull regimes, momentum-gated gold rotation during identified stress regimes, NIFTY 50 short exposure on panic-short fires, and haircut-adjusted RBI repo-rate cash yield on idle capital. Three independent signal lanes — USDINR momentum, India VIX momentum, and supply-shock / panic-short triggers — identify macro regime breaks, gated by a 100-day moving-average trend filter. Position sizing is binary across two assets (long-side index +1, gold +1, NIFTY short -1) with cash as the third state; no leverage beyond 1×.
+A systematic macro-regime strategy for Indian markets combining tactical long exposure to NIFTY 200 Momentum 30 in bull regimes, momentum-gated gold rotation during identified stress regimes, NIFTY 50 short exposure on panic-short fires, and haircut-adjusted RBI repo-rate cash yield on idle capital. A 100-day moving-average trend filter on NIFTY 50 acts as the long-engagement gate; supply-shock and panic-short signal lanes (computed from crude oil, USD/INR, and India VIX) override engagement during identified macro stress. Position sizing is binary across two assets (long-side index +1, gold +1, NIFTY 50 futures -1) with cash as the third state; no leverage beyond 1×.
 
 *Research project. Backtest results, methodology, and known limitations documented below. Not deployed; not investment advice.*
 
@@ -30,7 +30,7 @@ The strategy generates risk-adjusted alpha vs passive NIFTY exposure through thr
 
 The strategy's outperformance derives from three mechanisms that compound together over the 17.7-year sample. Their contributions are inherently joint and cannot be cleanly attributed to additive percentages, since each mechanism affects the compounding base for the others.
 
-**Tactical long exposure to a momentum-tilted equity portfolio.** The strategy is long the long-side index ~66% of trading days (calm bull regimes), flat ~33% (bear regimes and stress flats), short NIFTY 50 ~1% (panic-short windows), and long gold ~1% (stress-flat windows where gold momentum is positive). When long, the strategy holds **NIFTY 200 Momentum 30** — a 30-stock factor-tilted portfolio drawn from the NIFTY 200 universe and ranked semi-annually by 6-month and 12-month price momentum. This generates bull-regime alpha that v1.2's NIFTY-50 long-side architecture could not produce structurally. Short exposure during panic-shorts remains on NIFTY 50 (more liquid for futures-based shorting). Avoiding equity exposure during identified bear regimes captures volatility-drag alpha — a strategy that sidesteps the left-tail of the equity return distribution compounds at a higher geometric rate than buy-and-hold even with similar arithmetic mean returns. This is the core mechanism; the others amplify it.
+**Tactical long exposure to a momentum-tilted equity portfolio.** The strategy holds long exposure to NIFTY 200 Momentum 30 by default during bull regimes (NIFTY 50 above its 100-day moving average), with supply-shock and panic-short overrides interrupting that exposure during identified macro stress. Capital avoidance of left-tail equity returns — the days where stress overrides force flat or short — generates volatility-drag alpha vs buy-and-hold. The strategy is long the long-side index ~66% of trading days (calm bull regimes), flat ~33% (bear regimes and stress flats), short NIFTY 50 ~1% (panic-short windows), and long gold ~1% (stress-flat windows where gold momentum is positive). When long, the strategy holds **NIFTY 200 Momentum 30** — a 30-stock factor-tilted portfolio drawn from the NIFTY 200 universe and ranked semi-annually by 6-month and 12-month price momentum. This generates bull-regime alpha that v1.2's NIFTY-50 long-side architecture could not produce structurally. Short exposure during panic-shorts remains on NIFTY 50 (more liquid for futures-based shorting). This is the core mechanism; the others amplify it.
 
 **Momentum-gated safe-haven rotation.** During identified stress-flat windows, capital rotates to GOLDBEES.NS — but only when gold's 10-day momentum is positive at the start of the latch, and only while it stays positive during the latch. If gold momentum turns negative mid-latch, the strategy exits gold to cash for the remainder of the latch (one-way door — no re-entry within the same latch). This per-latch state machine addresses a structural failure mode where supply-shock signals fire after gold has already rallied, leaving the strategy buying gold near tops. v1.2 holds gold ~41 days across the sample (about half of v1.1.1's 76 days); the gate blocks entry when gold is in a downtrend or exits early when the rally reverses.
 
@@ -106,13 +106,15 @@ Configurations were evaluated on the joint criterion of risk-adjusted return (Sh
 
 ## Strategy Overview
 
-The framework targets alpha through **regime identification combined with multi-asset rotation**. Three independent macro-regime signal lanes are computed daily:
+The framework targets alpha through **regime identification combined with multi-asset rotation**. One engagement gate plus two stress overrides operate together:
 
-1. **USDINR momentum** — long entry on rupee strengthening (capital inflows, risk-on)
-2. **India VIX momentum** — long entry on fear subsiding (post-stress mean reversion)
-3. **Supply-shock and panic-short triggers** — exit-to-flat or active short on coordinated macro stress (oil + INR + VIX, with an absolute VIX-level filter for the short leg)
+1. **Regime filter (engagement gate)** — long when NIFTY 50 closes above its 100-day moving average; flat when below. Detects bull/bear regimes on NIFTY 50 independently of which asset is held on the long side (this separates regime detection from asset selection).
+2. **Supply-shock override (force flat)** — coordinated stress in oil, USDINR, and India VIX forces the strategy to flat with momentum-gated re-entry.
+3. **Panic-short override (force short)** — absolute high VIX combined with accelerating VIX and broken trend forces an active short on NIFTY 50.
 
-A 100-day moving-average regime filter on **NIFTY 50** acts as the final gate: longs are only permitted when NIFTY 50 is above its 100 DMA, shorts only when below. Regime detection runs on NIFTY 50 (the cleanest broad-market macro-sentiment proxy) regardless of which asset is held on the long side — this separates regime detection from asset selection. Position sizing is binary across two long-side assets (long NIFTY 200 Momentum 30 = +1, long gold = +1, short NIFTY 50 = -1, cash flat = 0); no leverage beyond 1×. Position-logic priority is: long entry → supply-shock exit override → panic-short override → regime-filter gate → momentum-gated gold rotation overlay on stress-flat days (gated on gold's own 10-day momentum) → RBI repo cash yield (minus 100 bps haircut) on remaining flat days.
+A momentum-gated gold rotation overlay rotates capital to GOLDBEES.NS during stress-flat windows when gold's own short-term momentum is positive. Idle capital on remaining flat days earns the RBI repo rate minus a 100 bps haircut.
+
+Position sizing is binary across two long-side assets (long NIFTY 200 Momentum 30 = +1, long gold = +1, short NIFTY 50 = -1, cash flat = 0); no leverage beyond 1×. Position-logic priority is: regime-filter engagement (long when NIFTY > 100 DMA absent overrides) → supply-shock override (force flat) → panic-short override (force short, regime-filter-permitting) → momentum-gated gold rotation overlay on stress-flat days → RBI repo cash yield (minus 100 bps haircut) on remaining flat days.
 
 The framework targets alpha through regime identification combined with multi-asset rotation. When in a bull regime, the strategy holds NIFTY 200 Momentum 30 (the long-side asset selected for higher expected return than NIFTY 50 — see Long-Side Asset Selection). When the strategy identifies a stress regime, gold rotation is conditional on gold's own momentum — gold is held only while its 10-day return is positive, and the strategy exits to cash mid-latch if momentum turns negative. When fully flat, idle capital earns the time-varying RBI repo rate minus a 100 bps haircut modeling realistic liquid-fund execution. This produces three independent mechanisms — tactical long exposure to a momentum-tilted equity portfolio, momentum-gated safe-haven rotation, and cash management — that compound across the 17-year sample.
 
@@ -120,25 +122,16 @@ The framework targets alpha through regime identification combined with multi-as
 
 ## Signal Logic
 
-### 1. USDINR Momentum — Long Entry
+### 1. Long Engagement — Regime Filter
 
-**Economic rationale.** A strengthening rupee correlates with risk-on flows into Indian equities, foreign portfolio inflows, and easing of import-cost pressure on margins. Sustained INR strength is a leading indicator of bullish equity sentiment.
-
-**Mechanics.**
-- Signal: 10-day percentage change in USDINR (Yahoo: `INR=X`)
-- Long entry: USDINR has fallen by more than 1% over 10 days (rupee strengthened)
-- Long-only; no exit logic in this lane (exits handled by supply-shock and panic-short lanes)
-
-### 2. India VIX Momentum — Long Entry
-
-**Economic rationale.** Falling implied volatility signals subsiding fear and a regime of risk appetite, historically associated with multi-week equity rallies. Captures the calm-after-the-storm mean reversion that follows volatility spikes.
+**Economic rationale.** The 100 DMA trend filter is the binding gate for long engagement. When NIFTY 50 closes above its 100-day moving average, the strategy holds the long-side asset (NIFTY 200 Momentum 30) absent any active override. When NIFTY 50 closes below, longs are forced flat. The 100-day moving average serves as a coarse trend filter, ensuring the strategy holds long exposure only in confirmed uptrends.
 
 **Mechanics.**
-- Signal: 10-day percentage change in India VIX (`^INDIAVIX`)
-- Long entry: VIX has fallen by more than 20% over 10 days
-- Long-only
+- Bull regime (NIFTY 50 > 100 DMA): longs engaged, shorts blocked
+- Bear regime (NIFTY 50 < 100 DMA): longs forced flat, shorts permitted
+- Applied as the final override after all other lanes have been computed
 
-### 3. Supply-Shock Trigger — Force Flat
+### 2. Supply-Shock Override — Force Flat
 
 **Economic rationale.** When crude oil, USDINR, and India VIX move adversely in unison over a short window, India's macro vulnerability is acute (worsening current account, currency pressure, equity outflows). Rather than sit through the drawdown, the strategy steps to flat until the panic subsides.
 
@@ -149,7 +142,7 @@ The framework targets alpha through regime identification combined with multi-as
 
 When fired, position is forced to flat (0). Re-entry is gated on a NIFTY 5-day return exceeding 0.5% — wait for upside confirmation before re-engaging.
 
-### 4. Panic-Short Trigger — Active Short
+### 3. Panic-Short Override — Active Short
 
 **Economic rationale.** A high absolute VIX level *combined with* an accelerating VIX spike *and* NIFTY already below trend captures regimes where the cycle has decisively turned bearish — distinct from the transient stress that the supply-shock lane handles. In these regimes, capital protection plus directional exposure to the bearish move is preferable to going flat.
 
@@ -158,16 +151,44 @@ When fired, position is forced to flat (0). Re-entry is gated on a NIFTY 5-day r
 - VIX up more than 50% over 10 days
 - NIFTY closing below its 100-day moving average
 
-When fired, position is forced to -1 (active short). Short exits when the NIFTY 5-day MA crosses above the 20-day MA. After short exit, the strategy stays flat until the NIFTY 5-day return > 0.5% confirmation fires.
+When fired, position is forced to -1 (active short on NIFTY 50). Short exits when the NIFTY 5-day MA crosses above the 20-day MA. After short exit, the strategy stays flat until the NIFTY 5-day return > 0.5% confirmation fires.
 
-### 5. Regime Filter — Final Gate
+### 4. Gold Rotation — Mid-Latch Momentum Gate
 
-**Economic rationale.** The 100-day moving average serves as a coarse trend filter, ensuring lane signals operate in their intended directional context — longs only get through in confirmed uptrends, shorts only in confirmed downtrends.
+**Economic rationale.** During supply-shock force-flat windows, capital rotates to GOLDBEES.NS as a safe-haven asset — but only when gold's own short-term momentum is positive. This avoids buying gold after it has already rallied on the same macro stress that triggered the override.
 
 **Mechanics.**
-- Bull regime: NIFTY > 100 DMA → longs permitted, shorts blocked
-- Bear regime: NIFTY < 100 DMA → longs forced flat, shorts permitted
-- Applied as a final override after all three lanes have been computed
+- Entry: at supply-shock latch start, rotate to gold only if GOLDBEES.NS 10-day return > 0
+- Mid-latch: if 10-day return turns negative, exit to cash for remainder of latch (one-way door)
+- Re-entry: only allowed in a new latch (next supply-shock fire)
+
+### 5. Tested But Not Adopted
+
+The codebase retains two signal classes — `USDINRSignal` and `IndiaVIXSignal` — that were originally designed as long-entry confirmation lanes. They were evaluated as binding gates on long re-entry: requiring an entry signal to fire during a flat period before the strategy could re-engage the long-side asset. The variant was backtested over the full 2008-2025 sample under otherwise-identical mechanics (Config 6 production base: Momentum 30 long-side, momentum-gated gold rotation, 100 bps repo haircut).
+
+**Variant tested.** Entry signal definitions (10-day windows):
+- USDINR momentum: USDINR has fallen >1% over 10 days (rupee strengthening)
+- India VIX momentum: VIX has fallen >20% over 10 days (vol decay)
+
+Gate logic: when NIFTY > 100 DMA but the strategy is transitioning from a flat state to long, require an entry signal to have fired during the flat period (or fire today) before allowing the long. If no signal has fired, the strategy stays flat until one fires.
+
+**Results.**
+
+| Metric | Production (v1.3) | Gated variant | Δ |
+|---|---|---|---|
+| Cumulative return | 2,022.6% | 1,553.3% | -469.4pp |
+| CAGR | 18.08% | 16.49% | -1.59pp |
+| Sharpe (RF=6%) | 0.83 | 0.78 | -0.05 |
+| Sortino | 0.97 | 0.87 | -0.10 |
+| Calmar | 1.00 | 0.96 | -0.04 |
+| Max drawdown | -18.1% | -17.2% | +0.9pp |
+| Annualized vol | 13.90% | 12.93% | -0.96pp |
+
+The gated variant blocked 423 re-entry attempts and added ~1.7 years of additional flat exposure over the sample. The CAGR cost (1.59pp) outweighed the modest vol reduction (0.96pp) and drawdown improvement (0.9pp). The cost concentrates in V-shaped recovery years where the entry signals lag the trend reversal: 2009 (-8.1pp), 2014 (-8.0pp), 2017 (-16.4pp), 2021 (-11.2pp).
+
+**Conclusion.** The 100 DMA trend filter dominates the carry- and vol-based entry signals on the relevant time scales. The trend filter detects regime recovery faster than currency strength or vol decay because the latter often lag cyclical recoveries rather than precede them. The signal classes are retained in the codebase as scaffolding for future iterations exploring alternative entry-signal definitions (e.g. breadth, shorter MA crossovers, VIX-peak-rollover), but do not affect production positions in v1.3.
+
+The full test script is at [`experiments/test_entry_signal_gate.py`](experiments/test_entry_signal_gate.py).
 
 ---
 
@@ -324,6 +345,8 @@ Active weaknesses I am addressing on the roadmap.
 
 6. **Momentum-factor V-recovery lag.** Long-side exposure is to NIFTY 200 Momentum 30, a factor-tilted portfolio that lags during V-shaped recoveries — a well-documented failure mode of momentum strategies (Daniel & Moskowitz 2016, *Momentum Crashes*). In recovery transitions, the highest-beta names to the rebound are typically those that were beaten down hardest in the crash, so they are not present in the winners portfolio. The strategy mitigates this two ways: (a) the regime filter keeps exposure flat or short during the crash itself, so the worst of the underlying drawdown is avoided; (b) the regime filter re-engages long exposure only after NIFTY 50 has recovered above its 100 DMA, at which point the Momentum 30 index has begun its own internal rotation toward the new winners. Empirically observed in the 2009 sample: the strategy underperformed NIFTY 50 by -16.3pp that calendar year but had already avoided -41.9pp of the 2008 GFC drawdown. The trade-off is structural and accepted; a regime-conditional asset selection overlay is in the roadmap.
 
+7. **Lagging recovery detection.** The 100-DMA trend filter is a lagging indicator by construction — NIFTY typically rallies 15-25% off a crisis trough before crossing its 100 DMA, so the strategy systematically misses the early-recovery phase of each cycle. This is closely related to the momentum-factor V-recovery lag documented above, and the two failure modes compound. Candidate replacements or augmentations include breadth signals (% of NIFTY 200 above 50 DMA), shorter MA crossovers (20/50 golden cross), and VIX-peak-rollover detection (separate from the absolute VIX-level signal). None were adopted in v1.3 because faster trend filters generate more false signals in chop regimes and require dedicated parameter testing; revisit in v1.4.
+
 ---
 
 ## Backtest Caveats
@@ -348,17 +371,18 @@ These are structural caveats inherent to backtest research and macro-strategy de
 
 In progress and planned, in priority order:
 
-1. **Walk-forward parameter validation** — re-fit thresholds and lookback windows on rolling 5-year windows; report out-of-sample-only equity curve. Includes walk-forward validation of the gold rotation rule and the long-side asset choice. **Highest-priority next step.**
+1. **Walk-forward parameter validation** — re-fit thresholds and lookback windows on rolling 5-year windows; report out-of-sample-only equity curve. Includes walk-forward validation of the gold rotation rule and the long-side asset choice.
 2. ~~**Higher-alpha equity index substitution for bull regimes**~~ — **COMPLETED in v1.3.** NIFTY 200 Momentum 30 substituted for NIFTY 50 as the long-side asset. Eight candidates considered, two backtested (Midcap 150 rejected on drawdown grounds, Mom30 selected). See Long-Side Asset Selection section. Realized impact: +5.5pp CAGR over v1.2; drawdown widened 2pp (within accepted tolerance).
 3. **Regime-conditional asset selection (V-recovery overlay).** The v1.3 architecture separates regime detection (on NIFTY 50) from asset selection (long-side asset), enabling the long-side asset to be made conditional on the current regime classification. A natural extension is to switch from Momentum 30 to a broader or higher-beta index during V-recovery transitions (the Daniel-Moskowitz 2016 momentum-crash failure mode, observed in our 2009 sample). Requires a recovery classifier (candidates: breadth, realized-vol direction, time since regime-filter flip) and a defined re-entry rule into Momentum 30. Sample contains only 2-3 unambiguous recoveries (2009, 2020, possibly mid-2022), so forward paper-trading evidence is needed before tuning specifically against historical events.
-4. **Quality 30 / Low Volatility 30 as alternative long-side assets** — tested in v1.3 only as candidates rejected without backtest; revisit if Momentum 30 underperforms over a future OOS window. A defensive long-side asset (Low Vol or Quality) could be used as a regime-conditional alternative to Momentum 30, replacing it during identified V-recovery phases (links to roadmap item 3).
-5. **Additional safe-haven cross-asset overlays** — extend beyond gold to USDINR and other defensive assets historically resilient during India-stress regimes. Targets diversification of the safe-haven sleeve and improvements to Sharpe through reduced single-asset reliance during stress windows.
-6. **Slow-stress regime layer** — classification step to distinguish crash-type stress from grind-down stress, addressing the 2013 / 2018 failure modes.
-7. **Panic-short exit framework redesign** — replace the current single-rule MA crossover exit with a layered framework: profit-take at +X%, stop-loss at -Y%, volatility-normalized exit thresholds (scale by current VIX), and immediate re-evaluation of entry conditions (cover the moment any of the three entry conditions flips). Required before flipping the production config from `hold=False` to `hold=True`. Addresses Limitation #3.
-8. **Signal-by-signal P&L attribution** — decompose cumulative P&L by lane (USDINR, VIX, supply-shock, panic-short, regime-filter contribution) to confirm each signal independently earns its keep.
-9. **Forward paper-trading** — daily logged signals against live data from 2026 onward.
-10. **Productionize the RBI repo rate feed** — replace the hardcoded `RBI_REPO_RATE_HISTORY` table with a CSV-backed config file (`data/rbi_repo_rate.csv`) plus a FRED API fallback for any dates after the last manual entry. Add a runtime warning if the strategy runs on a date past the latest available rate. Required before any live trading; nice-to-have for paper trading.
-11. **Modular refactor** — break monolithic `strategy.py` into `src/data.py`, `src/signals.py`, `src/backtest.py` for extensibility.
+4. **Early-recovery detection.** The 100-DMA trend filter lags cyclical recoveries by 15-25% of the underlying move. Candidate replacements/augmentations: breadth signals (% of NIFTY 200 above 50 DMA), shorter MA crossovers (20/50 golden cross), VIX-peak-rollover (VIX has fallen ≥30% from a recent peak above 25). Trade-off to test: faster trend filters generate more false signals in chop regimes. Requires dedicated parameter testing and OOS validation before adoption.
+5. **Quality 30 / Low Volatility 30 as alternative long-side assets** — tested in v1.3 only as candidates rejected without backtest; revisit if Momentum 30 underperforms over a future OOS window. A defensive long-side asset (Low Vol or Quality) could be used as a regime-conditional alternative to Momentum 30, replacing it during identified V-recovery phases (links to roadmap item 3).
+6. **Additional safe-haven cross-asset overlays** — extend beyond gold to USDINR and other defensive assets historically resilient during India-stress regimes. Targets diversification of the safe-haven sleeve and improvements to Sharpe through reduced single-asset reliance during stress windows.
+7. **Slow-stress regime layer** — classification step to distinguish crash-type stress from grind-down stress, addressing the 2013 / 2018 failure modes.
+8. **Panic-short exit framework redesign** — replace the current single-rule MA crossover exit with a layered framework: profit-take at +X%, stop-loss at -Y%, volatility-normalized exit thresholds (scale by current VIX), and immediate re-evaluation of entry conditions (cover the moment any of the three entry conditions flips). Required before flipping the production config from `hold=False` to `hold=True`. Addresses Limitation #3.
+9. **Signal-by-signal P&L attribution** — decompose cumulative P&L by lane (USDINR, VIX, supply-shock, panic-short, regime-filter contribution) to confirm each signal independently earns its keep.
+10. **Forward paper-trading** — daily logged signals against live data from 2026 onward.
+11. **Productionize the RBI repo rate feed** — replace the hardcoded `RBI_REPO_RATE_HISTORY` table with a CSV-backed config file (`data/rbi_repo_rate.csv`) plus a FRED API fallback for any dates after the last manual entry. Add a runtime warning if the strategy runs on a date past the latest available rate. Required before any live trading; nice-to-have for paper trading.
+12. **Modular refactor** — break monolithic `strategy.py` into `src/data.py`, `src/signals.py`, `src/backtest.py` for extensibility.
 
 ---
 
@@ -369,7 +393,10 @@ In progress and planned, in priority order:
 | v1.0 | Single-asset directional (no gold, no cash yield). Preserved at commit `c2860fc`. | 467.2% | 9.91% | 0.33 | -22.2% |
 | v1.1.1 | Adds gold rotation throughout stress-flat latches + pure-repo cash yield. Preserved at commit `078878a`. | 908.4% | 13.40% | 0.55 | -18.3% |
 | v1.2 | Adds momentum-gated gold rotation (per-latch state machine) + 100 bps repo haircut. | 784.8% | 12.59% | 0.50 | -16.4% |
-| **v1.3** | **Substitutes NIFTY 200 Momentum 30 for NIFTY 50 as long-side asset; regime detection unchanged. Current.** | **2,022.6%** | **18.08%** | **0.83** | **-18.1%** |
+| v1.3 | Substitutes NIFTY 200 Momentum 30 for NIFTY 50 as long-side asset; regime detection unchanged. | 2,022.6% | 18.08% | 0.83 | -18.1% |
+| **v1.3.1** | **README correction. Documents architecture honestly: 100 DMA regime filter is the binding entry gate; USDINR/VIX signal classes retained as scaffolding only. Test results for entry-signal-gated variant added. No code or numerical changes vs v1.3.** | **2,022.6%** | **18.08%** | **0.83** | **-18.1%** |
+
+v1.3.1 is a documentation-only patch; results and code are identical to v1.3.
 
 v1.3 trades a modest 2pp drawdown deterioration (-18.1% vs v1.2's -16.4%) for substantial CAGR uplift (+5.5pp), better Calmar (1.00 vs 0.77), and significantly higher Sharpe (0.83 vs 0.50). The architectural change — separating regime detection (on NIFTY 50) from long-side asset selection (NIFTY 200 Momentum 30) — enables future regime-conditional asset selection work (roadmap item 3). A new factor-specific limitation is documented: momentum-factor V-recovery lag (Limitation #6), mitigated by the regime filter keeping exposure flat during the worst of crash phases.
 
