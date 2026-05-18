@@ -172,3 +172,4 @@ pull_nse_history.py
 test_v13_oos_and_costs.py
 verify_index_data.py
 v13_full_output.txt
+parked/

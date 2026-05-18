@@ -92,6 +92,42 @@ class IndiaVIXSignal(MacroSignal):
         s[data["^INDIAVIX"].pct_change(self.window) < -self.threshold] = 1.0
         return s
 
+class SlowStressSignal(MacroSignal):
+    """v1.4 slow-stress signal — replaces SupplyShockSignal as the default
+    stress-flat trigger. Detects sustained EM stress regimes that the
+    10d-acute supply-shock composite misses (notably 2013 taper, 2018 NBFC).
+
+    Fires when ALL three conditions hold simultaneously:
+      - USDINR pct_change(inr_window) > inr_threshold
+            (sustained rupee weakening — capital flight proxy)
+      - VIX 90d rolling z-score > vix_z_threshold
+            (vol elevated relative to recent regime, not absolute)
+      - VIX - VIX.shift(vix_mom_window) > 0
+            (vol still rising — kills the signal during recoveries)
+
+    Returns -1 on firing days (matches SupplyShockSignal convention for
+    force-flat overrides). Cross-country validated on US data 1995-2025
+    using DXY as the INR analog (9/9 known stress events caught,
+    3.84% overall fire rate)."""
+    name = "slow_stress"
+    def __init__(self, inr_window=20, inr_threshold=0.01,
+                 vix_z_window=90, vix_z_threshold=1.5,
+                 vix_mom_window=5):
+        self.inr_window      = inr_window
+        self.inr_threshold   = inr_threshold
+        self.vix_z_window    = vix_z_window
+        self.vix_z_threshold = vix_z_threshold
+        self.vix_mom_window  = vix_mom_window
+    def compute(self, data):
+        inr_w = data["INR=X"].pct_change(self.inr_window) > self.inr_threshold
+        vix   = data["^INDIAVIX"]
+        z     = (vix - vix.rolling(self.vix_z_window).mean()) / vix.rolling(self.vix_z_window).std()
+        mom   = vix - vix.shift(self.vix_mom_window)
+        fires = inr_w & (z > self.vix_z_threshold) & (mom > 0)
+        s = pd.Series(0.0, index=data.index, name=self.name)
+        s[fires.fillna(False)] = -1.0
+        return s
+
 class RegimeFilter:
     def __init__(self, window=200, target="^NSEI"):
         self.window = window; self.target = target
@@ -115,9 +151,18 @@ class SignalCombiner:
                  rotate_to_gold_on_panic_short=False,
                  rotate_with_momentum=False,
                  gold_momentum_window=10,
-                 gold_target="GOLDBEES.NS"):
+                 gold_target="GOLDBEES.NS",
+                 gold_gate_external=True,
+                 gold_gate_upper_cap=0.10,
+                 gold_gate_inr_threshold=0.005,
+                 gold_gate_us10y_threshold=0.0):
         self.entry_signals = []
         self.exit_signals = []
+        # v1.4: signals that force-flat ONLY on the day they fire (no cooldown
+        # extension via NIFTY-momentum recovery gate). Used for SlowStressSignal
+        # which fires on slow rolling windows — extending via cooldown would
+        # double-count the time horizon.
+        self.exit_signals_no_cooldown = []
         self.short_signals = []
         self.regime_filter = regime_filter
         self.reentry_momentum_threshold = reentry_momentum_threshold
@@ -130,11 +175,30 @@ class SignalCombiner:
         self.rotate_with_momentum = rotate_with_momentum
         self.gold_momentum_window = gold_momentum_window
         self.gold_target = gold_target
+        # v1.4 G10 gold gate — adds three structural improvements vs the
+        # original `gold_10d > 0` entry rule:
+        #   1. Upper momentum cap (gold_gate_upper_cap, default 10%) prevents
+        #      blow-off-top entries (e.g., 2026-01-29 entered at +24% gold 10d,
+        #      crashed -19% within days under legacy gate).
+        #   2. INR confirmation (gold_gate_inr_threshold) — gold priced in
+        #      USD; weakening INR mechanically lifts INR-priced gold.
+        #   3. US10Y direction (gold_gate_us10y_threshold) — falling US yields
+        #      lift gold (real-yield channel).
+        # Requires data["INR=X"] and data["^TNX"] columns when active. Set
+        # gold_gate_external=False to revert to legacy `gold_10d > 0` only.
+        self.gold_gate_external = gold_gate_external
+        self.gold_gate_upper_cap = gold_gate_upper_cap
+        self.gold_gate_inr_threshold = gold_gate_inr_threshold
+        self.gold_gate_us10y_threshold = gold_gate_us10y_threshold
 
     def add_entry(self, signal, weight=1.0):
         self.entry_signals.append((signal, weight)); return self
     def add_exit(self, signal):
         self.exit_signals.append(signal); return self
+    def add_exit_no_cooldown(self, signal):
+        """Like add_exit but force-flats ONLY on firing days; no cooldown
+        extension. Used by SlowStressSignal in v1.4."""
+        self.exit_signals_no_cooldown.append(signal); return self
     def add_short(self, signal, hold=True, max_hold_days=60,
                   exit_ma_fast=None, exit_ma_slow=None):
         self.short_signals.append((signal, hold, max_hold_days, exit_ma_fast, exit_ma_slow))
@@ -187,6 +251,15 @@ class SignalCombiner:
             ef_series = pd.Series(exit_flat, index=idx)
             position[ef_series] = 0.0
             stress_flat_mask = stress_flat_mask | ef_series
+
+        # Lane 2b: no-cooldown exit signals — force flat ONLY on firing days.
+        # v1.4: SlowStressSignal uses this lane; its 90d/20d windows are
+        # already slow, so extending via NIFTY-momentum cooldown would
+        # double-count the time horizon and over-extend cash days.
+        for signal in self.exit_signals_no_cooldown:
+            firing = signal.compute(data) < 0
+            position[firing] = 0.0
+            stress_flat_mask = stress_flat_mask | firing
 
         # Lane 3: short signals → -1 when firing.
         # If rotate_to_gold_on_panic_short=True, this overrides to flat
@@ -247,6 +320,17 @@ class SignalCombiner:
                 else:
                     gold_10d = pd.Series(np.nan, index=idx)
 
+                # v1.4 G10 gate inputs — INR 10d and US10Y 20d series. Only
+                # used when gold_gate_external=True AND the required columns
+                # exist; otherwise gate falls back to legacy `gold_10d > 0`.
+                inr_10d_vals = None
+                us10y_20d_vals = None
+                if self.gold_gate_external:
+                    if "INR=X" in data.columns:
+                        inr_10d_vals = data["INR=X"].pct_change(10).values
+                    if "^TNX" in data.columns:
+                        us10y_20d_vals = data["^TNX"].pct_change(20).values
+
                 stress_vals  = stress_flat_mask.values
                 nifty_vals   = nifty_position.values
                 gold_10d_vals = gold_10d.values
@@ -256,6 +340,26 @@ class SignalCombiner:
                 in_gold = False
                 exited_gold_this_latch = False
 
+                def entry_gate_passes(i, g10):
+                    """G10 gate: gold_10d in (0, cap] AND INR weakening AND
+                    US10Y falling. Falls back to legacy `g10 > 0` when external
+                    indicators unavailable."""
+                    if np.isnan(g10) or g10 <= 0:
+                        return False
+                    if not self.gold_gate_external:
+                        return True   # legacy gate
+                    if g10 > self.gold_gate_upper_cap:
+                        return False  # blow-off-top guard
+                    if inr_10d_vals is not None:
+                        inr_v = inr_10d_vals[i]
+                        if np.isnan(inr_v) or inr_v <= self.gold_gate_inr_threshold:
+                            return False
+                    if us10y_20d_vals is not None:
+                        us_v = us10y_20d_vals[i]
+                        if np.isnan(us_v) or us_v >= self.gold_gate_us10y_threshold:
+                            return False
+                    return True
+
                 for i in range(n):
                     is_stress_flat_day = stress_vals[i] and (nifty_vals[i] == 0.0)
                     if is_stress_flat_day:
@@ -264,14 +368,15 @@ class SignalCombiner:
                             in_latch = True
                             exited_gold_this_latch = False
                             g10 = gold_10d_vals[i]
-                            if not np.isnan(g10) and g10 > 0:
+                            if entry_gate_passes(i, g10):
                                 in_gold = True
                                 gp[i] = 1.0
                             else:
                                 in_gold = False
                                 # gp[i] stays 0
                         else:
-                            # Continuing latch
+                            # Continuing latch — exit rule preserved (gold 10d
+                            # turning negative is the one-way exit door)
                             if in_gold:
                                 g10 = gold_10d_vals[i]
                                 if not np.isnan(g10) and g10 < 0:
@@ -374,7 +479,8 @@ class MacroStrategy:
                  use_cash_yield=True,
                  cash_yield_haircut_bps=100,
                  long_target="^NSEI",
-                 long_cost_bps=3):
+                 long_cost_bps=3,
+                 apply_tax=True, tax_rate=0.15):
         self.combiner = combiner
         self.target = target          # ^NSEI — used for signals, regime filter, SHORT positions
         self.gold_target = gold_target
@@ -389,6 +495,12 @@ class MacroStrategy:
         # still use ^NSEI (more liquid for futures-based shorting in practice).
         self.long_target = long_target
         self.long_cost_bps = long_cost_bps
+        # v1.4: tax model. apply_tax=True (default) returns post-tax daily
+        # returns in strategy_return. The original pre-tax series is also
+        # exposed as strategy_return_pretax for diagnostics. Set apply_tax=False
+        # to disable (recovers v1.3 behavior).
+        self.apply_tax = apply_tax
+        self.tax_rate = tax_rate
 
     def run(self, data):
         # Benchmark/short-side return: always ^NSEI
@@ -446,14 +558,21 @@ class MacroStrategy:
         # Cost to enter/exit cash sweep (default 0 — institutional auto-sweep is free)
         cash_cost = cash_position.diff().abs() * (self.cash_cost_bps / 10000)
 
-        strategy_returns = (nifty_pnl + gold_pnl + cash_pnl - cash_cost).rename("strategy_return")
+        strategy_returns_pretax = (nifty_pnl + gold_pnl + cash_pnl - cash_cost).rename("strategy_return_pretax")
+        if self.apply_tax:
+            strategy_returns = apply_annual_tax(
+                strategy_returns_pretax.fillna(0.0), tax_rate=self.tax_rate
+            ).rename("strategy_return")
+        else:
+            strategy_returns = strategy_returns_pretax.rename("strategy_return")
 
         results = pd.DataFrame({
-            "nifty_return":    nifty_returns,
-            "gold_return":     gold_returns,
-            "nifty_position":  nifty_pos,
-            "gold_position":   gold_pos,
-            "strategy_return": strategy_returns,
+            "nifty_return":            nifty_returns,
+            "gold_return":             gold_returns,
+            "nifty_position":          nifty_pos,
+            "gold_position":           gold_pos,
+            "strategy_return":         strategy_returns,
+            "strategy_return_pretax":  strategy_returns_pretax,
         })
         # Backward-compat: combined "position" column for diagnostic display.
         # +1 = long NIFTY, -1 = short NIFTY, +2 = long gold, 0 = flat (cash)
@@ -496,6 +615,27 @@ def metrics(ret_series):
                 sortino=sortino, max_dd=dd, calmar=calmar)
 
 
+def apply_annual_tax(daily_returns, tax_rate=0.15):
+    """Indian short-term capital gains tax approximation.
+
+    Scales each tax year's daily returns by (1 - tax_rate) when the year
+    compounds to a net positive return. Loss years are unaffected (implicit
+    intra-year loss offset). The linear scaling is an approximation of the
+    true per-trade realized-gain tax — accurate enough for deployability
+    analysis on daily-rebalanced strategies where most gains are short-term.
+
+    For pre-tax analysis use the strategy_return column directly, or pass
+    apply_tax=False to MacroStrategy."""
+    out = daily_returns.copy()
+    yrs = daily_returns.index.year
+    annual = (1 + daily_returns).groupby(yrs).prod() - 1
+    for y in annual.index:
+        if annual[y] > 0:
+            mask = (daily_returns.index.year == y)
+            out.loc[mask] = daily_returns.loc[mask] * (1.0 - tax_rate)
+    return out
+
+
 def position_breakdown(res):
     """Counts of position states. Mutually exclusive — must sum to total days."""
     np_ = res["nifty_position"]; gp_ = res["gold_position"]
@@ -508,16 +648,38 @@ def position_breakdown(res):
             "total": int(long_n + short_n + long_g + flat)}
 
 
-def make_combiner(rotate_stress=False, rotate_panic=False, use_momentum_gold=False):
+def make_combiner(rotate_stress=False, rotate_panic=False, use_momentum_gold=False,
+                  use_supply_shock=False, gold_gate_external=True):
+    """v1.4 default combiner: SlowStressSignal replaces SupplyShockSignal
+    as the stress-flat trigger, G10 gold gate (external macro confirmation +
+    upper momentum cap) replaces legacy `gold_10d > 0` gate.
+
+    For v1.3 backward compatibility:
+        make_combiner(use_supply_shock=True, gold_gate_external=False)
+    """
     rf = RegimeFilter(window=100)
     c = SignalCombiner(regime_filter=rf,
                        rotate_to_gold_on_stress_flat=rotate_stress,
                        rotate_to_gold_on_panic_short=rotate_panic,
-                       rotate_with_momentum=use_momentum_gold)
+                       rotate_with_momentum=use_momentum_gold,
+                       gold_gate_external=gold_gate_external)
     c.add_entry(USDINRSignal(window=10, threshold=0.01), weight=1.5)
     c.add_entry(IndiaVIXSignal(window=10, threshold=0.20), weight=1.5)
-    c.add_exit(SupplyShockSignal(window=10, oil_threshold=0.03,
-                                 inr_threshold=0.01, vix_threshold=0.20))
+    if use_supply_shock:
+        # Legacy v1.3 supply-shock — acute 10d multi-asset AND composite.
+        # Uses add_exit (with NIFTY-momentum cooldown extension) for v1.3
+        # backward-compat.
+        c.add_exit(SupplyShockSignal(window=10, oil_threshold=0.03,
+                                     inr_threshold=0.01, vix_threshold=0.20))
+    else:
+        # v1.4 default — slow-stress signal catches 2013 taper, 2018 NBFC
+        # style sustained EM stress that supply-shock missed. Uses
+        # add_exit_no_cooldown because its windows (20d INR, 90d VIX-z) are
+        # already slow — additional cooldown extension would over-extend
+        # flat days and crush CAGR.
+        c.add_exit_no_cooldown(SlowStressSignal(inr_window=20, inr_threshold=0.01,
+                                                vix_z_window=90, vix_z_threshold=1.5,
+                                                vix_mom_window=5))
     c.add_short(PanicShortSignal(vix_level=25, vix_spike=0.50, window=10, dma=100),
                 hold=False, max_hold_days=60, exit_ma_fast=5, exit_ma_slow=20)
     return c
@@ -531,15 +693,16 @@ def main():
     WARMUP = "2006-01-01"
     START  = "2008-04-01"
     END    = "2025-12-31"
-    TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS"]
+    # v1.4: ^TNX (US 10Y yield) added — required by G10 gold gate
+    TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
 
     print("Downloading data ...", file=sys.stderr)
     raw = yf.download(TICKERS, start=WARMUP, end="2026-05-12",
                       auto_adjust=True, progress=False)["Close"]
     raw.dropna(how="all", inplace=True)
     # NOTE: do NOT ffill GOLDBEES.NS pre-2010 (no data → gold position must stay flat)
-    # ffill the others (NSE/oil/INR/VIX) for cross-market holiday alignment
-    for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX"]:
+    # ffill the others (NSE/oil/INR/VIX/US10Y) for cross-market holiday alignment
+    for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "^TNX"]:
         if col in raw.columns:
             raw[col] = raw[col].ffill()
     # GOLDBEES.NS: ffill ONLY after its first valid date (so intra-series holiday gaps
