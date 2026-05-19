@@ -1,0 +1,128 @@
+==============================================================================================================
+  SANITY CHECKS
+==============================================================================================================
+
+  Strategy v1.4 post-tax Sharpe: 0.775  (expected ~0.775)
+  Strategy v1.4 pre-tax  Sharpe: 0.871  (expected ~0.871)
+  Strategy v1.4 post-tax CAGR:   15.53%  (expected ~15.5%)
+  Strategy v1.4 pre-tax  CAGR:   18.51%  (expected ~18.51%)
+  Strategy v1.4 Max DD:          -17.2%  (expected ~-17.2%)
+
+  NIFTY 50 B&H pre-tax Sharpe:   0.267  (expected ~0.27)
+  NIFTY 50 B&H pre-tax CAGR:     9.74%  (expected ~9.74%)
+  Status: OK
+
+  Risk-parity sanity check — vol-implied weights at 2008 month-ends:
+    2008-04-30: w_mom=1.000, w_gold=0.000
+    2008-05-30: w_mom=1.000, w_gold=0.000
+    2008-06-30: w_mom=1.000, w_gold=0.000
+    2008-07-31: w_mom=1.000, w_gold=0.000
+    2008-08-29: w_mom=1.000, w_gold=0.000
+    2008-09-30: w_mom=1.000, w_gold=0.000
+
+==================================================================================================================================
+  OUTPUT 1 — HEADLINE COMPARISON (all post-tax, except where noted)
+==================================================================================================================================
+
+  #  Benchmark                                 CAGR     Vol   Sharpe  Sortino   Calmar    MaxDD
+  ------------------------------------------------------------------------------------------
+     Strategy v1.4                          +15.53% +11.78%    0.775     0.91     0.91   -17.2%
+     1. NIFTY 50 B&H                         +7.70% +17.32%    0.168     0.12     0.15   -51.7%
+     2. Mom30 B&H                           +11.68% +17.93%    0.372     0.39     0.21   -55.2%
+     3. GOLDBEES B&H                         +8.83% +20.45%    0.233     0.14     0.17   -51.4%
+     4. Static 50/50                         +9.45% +14.01%    0.288     0.26     0.17   -55.2%
+     5. Static 70/30                        +10.53% +14.57%    0.349     0.35     0.19   -55.2%
+     6. Risk-parity                          +7.84% +15.68%    0.181     0.12     0.14   -55.2%
+     7. Dynamic A: Regime filter alone      +14.22% +10.84%    0.727     0.83     0.93   -15.2%
+     8. Dynamic B: Regime + static gold     +14.25% +11.88%    0.676     0.85     0.70   -20.3%
+     9. Dynamic C: Cross-sectional mom      +15.11% +14.24%    0.638     0.74     0.51   -29.9%
+     10. Dynamic D: Vol-targeted Mom30      +10.27% +11.39%    0.389     0.50     0.43   -23.9%
+
+==============================================================================================================
+  OUTPUT 2 — STRATEGY EXCESS RETURNS vs each benchmark (post-tax)
+==============================================================================================================
+
+  vs Benchmark                            Δ CAGR (pp)    Δ Sharpe   Δ Max DD (pp)
+  -------------------------------------------------------------------------------
+  1. NIFTY 50 B&H                              +7.83      +0.606         +34.57
+  2. Mom30 B&H                                 +3.85      +0.403         +38.06
+  3. GOLDBEES B&H                              +6.69      +0.542         +34.27
+  4. Static 50/50                              +6.07      +0.487         +38.06
+  5. Static 70/30                              +4.99      +0.426         +38.06
+  6. Risk-parity                               +7.68      +0.594         +38.06
+  7. Dynamic A: Regime filter alone            +1.30      +0.047          -1.90
+  8. Dynamic B: Regime + static gold           +1.28      +0.099          +3.14
+  9. Dynamic C: Cross-sectional mom            +0.42      +0.136         +12.71
+  10. Dynamic D: Vol-targeted Mom30            +5.26      +0.386          +6.75
+
+  Interpretive note:
+  - Δ vs Dynamic B (Regime + static gold) isolates the alpha from active
+    gold rotation timing (G10 gate + per-latch state machine) above what
+    a static gold sleeve with regime filter delivers.
+  - Δ vs Dynamic A (Regime filter alone) isolates the alpha from the entire
+    override layer (slow-stress + panic-short + gold rotation) above the
+    regime filter in isolation.
+  - Δ vs Dynamic C (cross-sectional momentum) tests whether the sophisticated
+    multi-signal architecture beats a naive momentum-rotation rule.
+  - The smallest positive residual across dynamic benchmarks is the cleanest
+    measure of regime-timing alpha.
+
+==================================================================================================================================
+  OUTPUT 3 — CRISIS WINDOWS (pre-tax cumulative returns)
+==================================================================================================================================
+
+  Crisis                      Strat 1.NIFTY 50 2.Mom30 B& 5.Static 7 6.Risk-par 7.Dynamic  8.Dynamic 
+  ---------------------------------------------------------------------------------------------------
+  GFC 2008-09                +2.06%    -30.71%    -29.00%    -28.65%    -27.50%     +5.95%    +13.48%
+  Euro debt 2011             -0.61%    -18.12%    -12.80%     -2.80%     +3.47%     +1.04%    +14.94%
+  Taper 2013                 -2.62%     -2.42%     -1.20%     +2.24%     +2.93%     -2.36%     -0.09%
+  NBFC 2018                  -2.74%     -4.88%     -6.62%     -3.80%     -1.39%     -4.05%     -3.75%
+  COVID 2020                +23.82%    -20.91%    -16.50%     -7.65%    -15.60%     -0.66%     +7.40%
+  Russia 2022                -2.49%     -8.99%    -17.77%    -11.03%     -2.49%     -1.98%     +0.12%
+  Momentum 2025-26           +4.20%     -2.49%     +1.05%     +9.37%     +9.39%     +3.72%    +11.58%
+
+==================================================================================================================================
+  OUTPUT 4 — YEAR-BY-YEAR STRATEGY EXCESS (vs each benchmark, post-tax)
+==================================================================================================================================
+
+  Year    Strategy  vs N50NIFT  vs M30Mom3  vs 70/30St     vs DynA     vs DynB
+  ----------------------------------------------------------------------------
+  2008      +3.72%     +41.22     +42.26     +42.26      -0.06      -0.06
+  2009     +52.02%     -10.64      -3.35      +9.45      +2.37      +3.41
+  2010     +19.04%      +3.79      +3.43      +2.27      +5.45      +2.66
+  2011      -4.74%     +19.88     +12.57      -0.30      -1.58     -14.55
+  2012     +25.41%      +2.13      -5.50      +1.15      +0.74      +3.33
+  2013      +1.38%      -4.55      -8.58      -4.41      -1.50     +11.02
+  2014     +30.19%      +3.94      -9.48      +6.48      -1.48     +11.13
+  2015      +3.23%      +7.29      -5.42      -1.02      +1.28     +13.80
+  2016     +18.99%     +16.29     +11.58     +10.00      +0.27      +0.20
+  2017     +27.64%      +3.70     -17.26      -3.10      +1.50      +8.23
+  2018      -7.78%     -10.56      -5.34      -8.42      -0.60      -5.83  <<
+  2019      -0.66%     -10.92      -9.00      -5.57      -5.43     -12.20
+  2020     +50.83%     +37.58     +34.37     +31.84     +26.13     +22.70
+  2021     +40.19%     +19.85      -3.03     +12.90      +4.63     +19.74
+  2022      +0.99%      -2.88      +7.39      +1.51      -1.14      -1.87  <<
+  2023     +23.94%      +7.08      -9.87      -3.56      +0.00      +0.13
+  2024     +20.85%     +13.28      +3.71      +3.59      +0.00      +1.81
+  2025      +4.39%      -4.57      +9.50      -7.82      +0.41     -33.26  <<
+
+==============================================================================================================
+  OUTPUT 5 — TURNOVER / TRANSACTION COST BURDEN (approximate)
+==============================================================================================================
+
+  Turnover is computed where directly trackable (B&H = 0; monthly rebal ~ 1-2x;
+  dynamic strategies vary). For strategy v1.4 and dynamic benchmarks we estimate
+  via position-flip counting.
+
+  Benchmark                               Approximate annual turnover
+  -------------------------------------------------------------------
+  Strategy v1.4                                              15.18x
+  1. NIFTY 50 B&H                                0.00x (buy-and-hold)
+  2. Mom30 B&H                                   0.00x (buy-and-hold)
+  3. GOLDBEES B&H                       0.06x (one cash-to-gold flip)
+  4-5. Static portfolios (monthly rebal)  ~1.0-2.0x (12 rebalances/yr)
+  6. Risk-parity (monthly rebal)                            ~1.5-2.5x
+  7. Dynamic A: Regime filter alone            ~0.3-0.5x (rare flips)
+  8. Dynamic B: Regime + static gold                        ~1.5-2.5x
+  9. Dynamic C: Cross-sectional mom          ~3-5x (monthly switches)
+  10. Dynamic D: Vol-targeted Mom30            ~5-10x (daily scaling)
