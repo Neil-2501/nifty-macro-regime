@@ -12,18 +12,18 @@ A systematic macro-regime strategy for Indian markets combining tactical long ex
 
 Backtest period: **2008-04-01 to 2025-12-31** (17.7 years). Net results assume per-asset transaction costs of **3 bps per leg** on NIFTY 50 futures (short side), **6 bps per leg** on NIFTY 200 Momentum 30 ETFs (long side), and **5 bps per leg** on GOLDBEES.NS (gold ETF). Idle capital on fully-flat days earns the prevailing RBI repo rate minus a 100 bps haircut modeling realistic liquid-fund execution.
 
-| Metric | Strategy (v1.4) | NIFTY Buy & Hold | Δ |
+| Metric | Strategy (v1.5) | NIFTY Buy & Hold | Δ |
 |---|---|---|---|
-| Sharpe (post-tax, RF = 6%) | **0.78** | 0.27 | **+192%** |
-| Sharpe (pre-tax, RF = 6%) | 0.87 | 0.27 | +226% |
-| Sortino | 1.05 | 0.25 | **+320%** |
-| Calmar | 1.08 | 0.19 | **+468%** |
+| Sharpe (post-tax, RF = 6%) | **0.79** | 0.27 | **+193%** |
+| Sharpe (pre-tax, RF = 6%) | 0.88 | 0.27 | +226% |
+| Sortino | 1.04 | 0.25 | **+316%** |
+| Calmar | 1.20 | 0.19 | **+532%** |
 | Annualized volatility (pre-tax) | 13.68% | 19.27% | -29% |
-| Max drawdown | **-17.2%** | -51.7% | **-67%** |
-| CAGR (pre-tax) | 18.51% | 9.74% | **+877 bps** |
-| Cumulative return (pre-tax) | 2,166.8% | 451.9% | +1,714.9pp |
+| Max drawdown | **-15.5%** | -51.7% | **-70%** |
+| CAGR (pre-tax) | 18.63% | 9.74% | **+889 bps** |
+| Cumulative return (pre-tax) | 2,211.2% | 451.9% | +1,759.3pp |
 
-Sharpe figures are post-tax by default in v1.4, reflecting Indian short-term capital gains tax (15% annual-net model). Pre-tax Sharpe is reported alongside for reference. v1.3.1 reported pre-tax numbers exclusively; the v1.4 default change makes the headline metric natively deployability-relevant. CAGR, Sortino, Calmar, and vol shown above are pre-tax for benchmark comparability (NIFTY is also pre-tax).
+Sharpe figures are post-tax by default from v1.4 onward, reflecting Indian short-term capital gains tax (15% annual-net model). Pre-tax Sharpe is reported alongside for reference. v1.3.1 reported pre-tax numbers exclusively; the v1.4 default change makes the headline metric natively deployability-relevant. CAGR, Sortino, Calmar, and vol shown above are pre-tax for benchmark comparability (NIFTY is also pre-tax). v1.5 narrows max drawdown vs v1.4 (-15.5% vs -17.2%) by eliminating the 2019 gold-in-bull anomaly via a bear-regime requirement on gold rotation entry.
 
 The strategy generates risk-adjusted alpha vs passive NIFTY exposure through three independent mechanisms operating together: (1) tactical long exposure to a momentum-tilted equity portfolio — long NIFTY 200 Momentum 30 during bull regimes, flat or short NIFTY 50 during identified stress regimes; (2) momentum-gated safe-haven rotation — long gold during stress windows only when the multi-asset macro confirmation set is aligned, with mid-latch exit to cash if gold momentum turns negative; (3) cash management — idle capital earns the prevailing RBI repo rate minus a 100 bps haircut on fully-flat days, modeling realistic institutional liquid-fund execution. The 192% post-tax Sharpe improvement is the most direct measure of joint risk-adjusted skill across these mechanisms. Cumulative outperformance vs buy-and-hold (+1,715pp over 17.7 years) is the geometric outcome of compounding all three together — the mechanisms cannot be cleanly separated into additive contributions, since they interact through the position sequence and the compounding base.
 
@@ -540,7 +540,7 @@ Active weaknesses I am addressing on the roadmap.
 
 7. **Lagging recovery detection.** The 100-DMA trend filter is a lagging indicator by construction — NIFTY typically rallies 15-25% off a crisis trough before crossing its 100 DMA, so the strategy systematically misses the early-recovery phase of each cycle. This is closely related to the momentum-factor V-recovery lag documented above, and the two failure modes compound. Candidate replacements or augmentations include breadth signals (% of NIFTY 200 above 50 DMA), shorter MA crossovers (20/50 golden cross), and VIX-peak-rollover detection (separate from the absolute VIX-level signal). None were adopted in v1.4 because faster trend filters generate more false signals in chop regimes and require dedicated parameter testing; revisit in v1.5+.
 
-8. **Identified attribution-driven failure modes (under investigation).** Benchmark attribution surfaced two specific instances where override-layer priority rules cost the strategy materially: a 2019 case where gold rotation held through a regime flip back to bull (-4.34pp on 3 days) and a 2013 case where panic-short fired during a slow-stress window that should have prevailed (-3.03pp on 3 days). Both are surgical priority-rule edge cases rather than fundamental architecture issues. With both fixed, strategy alpha vs Dynamic A would improve from +1.30pp CAGR to approximately +2.0pp. Targeted fixes are v1.5 candidates.
+8. **Identified attribution-driven failure modes.** Benchmark attribution surfaced two specific override-layer priority-rule edge cases. (a) The **2019 gold-in-bull anomaly** (3 days, -4.34pp) — gold rotation held through a regime flip back to bull — is **fixed in v1.5** by requiring bear regime as a fourth gate condition on gold rotation entry and adding a mid-latch bull-flip exit; the rotation block now sits in `strategy.py` behind the backward-compatible `gold_require_bear=True` default. (b) A 2013 case (-3.03pp on 3 days) where panic-short fired during a slow-stress window that should have prevailed remains unaddressed; targeted fix is a v1.6 candidate. With both fixed, the strategy's alpha vs Dynamic A is approximately +1.42pp CAGR post-tax (v1.5).
 
 ---
 
@@ -568,7 +568,7 @@ These are structural caveats inherent to backtest research and macro-strategy de
 
 In progress and planned:
 
-1. **Surgical priority-rule fixes (v1.5 candidates).** Two specific instances identified through benchmark attribution: (a) 2019 gold-in-bull anomaly where gold rotation didn't exit on regime flip back to bull (-4.34pp on 3 days); (b) 2013 panic-short anomaly where panic-short fired during a slow-stress window when slow-stress override should have prevailed (-3.03pp on 3 days). Both are priority-rule edge cases. Fixes are targeted and low-risk, expected to add ~+0.7pp CAGR and improve MaxDD.
+1. **Remaining surgical priority-rule fix (v1.6 candidate).** Benchmark attribution identified two override-layer priority-rule edge cases. The 2019 gold-in-bull anomaly was fixed in v1.5 (see Version History). The remaining candidate is the **2013 panic-short anomaly** where panic-short fired during a slow-stress window when the slow-stress override should have prevailed (-3.03pp on 3 days). Targeted, low-risk fix; would close most of the residual gap to the Dynamic A benchmark.
 
 2. **Factor-rotation overlay for momentum-crash regimes.** Attribution analysis confirmed the 2018 underperformance vs NIFTY (-10.94pp) is primarily an asset-selection cost — Momentum 30 underperformed NIFTY 50 during the momentum-factor crash year. Factor-rotation overlay (switching long-side asset from Mom30 to NIFTY 50 or quality during momentum-factor drawdown regimes) is the direct fix. Analogous patterns in 2022 and 2025. Candidate detection signals: momentum-NIFTY spread rolling drawdown, momentum breadth (% of Mom30 constituents above their own 50 DMA), or cross-factor rotation models. Requires data sourcing for factor returns and careful out-of-sample validation. v1.5+ research.
 
@@ -609,9 +609,12 @@ In progress and planned:
 | v1.2 | Adds momentum-gated gold rotation (per-latch state machine) + 100 bps repo haircut. | 784.8% | 12.59% | 0.50 | -16.4% |
 | v1.3 | Substitutes NIFTY 200 Momentum 30 for NIFTY 50 as long-side asset; regime detection unchanged. | 2,022.6% | 18.08% | 0.83 | -18.1% |
 | v1.3.1 | README correction. Documents architecture honestly: 100 DMA regime filter is the binding entry gate; USDINR/VIX signal classes retained as scaffolding only. Test results for entry-signal-gated variant added. No code or numerical changes vs v1.3. | 2,022.6% | 18.08% | 0.83 | -18.1% |
-| **v1.4** | **Slow-stress signal replaces supply-shock as default stress detector (INR 20d weakness + VIX 90d z-score + VIX 5d momentum). G10 gold rotation gate replaces single-condition gate (adds INR + US 10Y macro confirmation, caps blow-off-top entries). Tax modeling integrated natively into strategy.py. Cross-country validation on US data 1995-2025 catches 9/9 documented stress events. New data dependency: ^TNX. Current.** | **2,166.8%** | **18.51%** | **0.78** (post-tax) / 0.87 (pre-tax) | **-17.2%** |
+| v1.4 | Slow-stress signal replaces supply-shock as default stress detector (INR 20d weakness + VIX 90d z-score + VIX 5d momentum). G10 gold rotation gate replaces single-condition gate (adds INR + US 10Y macro confirmation, caps blow-off-top entries). Tax modeling integrated natively into strategy.py. Cross-country validation on US data 1995-2025 catches 9/9 documented stress events. New data dependency: ^TNX. | 2,166.8% | 18.51% | 0.78 (post-tax) / 0.87 (pre-tax) | -17.2% |
+| **v1.5** | **Gold-in-bull anomaly fix. Gold rotation entry now requires bear regime (NIFTY < 100 DMA) as a fourth gate condition on top of G10; mid-latch bull-flip exit added alongside the existing 10d-negative exit. Eliminates the 3-day May 2019 anomaly (-4.34pp) where slow-stress fired in bull regime and gold rotation triggered against a recovering equity tape. Backward-compatible via `gold_require_bear=False`. No new data dependencies. Current.** | **2,211.2%** | **18.63%** | **0.79** (post-tax) / 0.88 (pre-tax) | **-15.5%** |
 
-v1.4's primary improvement vs v1.3.1 is methodological as well as mechanical. The cross-country validation on 31 years of US data provides substantially stronger empirical evidence that the signal architecture generalizes beyond the Indian sample, addressing the most direct overfitting concern that arises from a 17-year regime-conditional model. Post-tax Sharpe improvement (0.73 → 0.78) is meaningful but the headline finding is the validation methodology. The 2013 taper-tantrum failure mode is cleanly addressed (+3.43pp). The G10 gold gate update specifically addresses the 2026 H1 gold-rotation failure mode by adding macro confirmation requirements (INR + US 10Y) on top of the v1.2 momentum gate. 2018 remains a structural limitation related to the long-side asset choice (momentum-factor crash) rather than the signal architecture; this is documented in Limitations and on the roadmap for factor-rotation work in v1.5+.
+v1.5's headline impact is on drawdown control (MaxDD -17.2% → -15.5%, Calmar 1.08 → 1.20) more than on CAGR (+0.12pp pre-tax). The 2019 anomaly was a single 3-day window where the priority logic let gold rotation enter against a regime-bull tape; the fix closes it surgically without touching any other signal. Post-tax alpha vs the Dynamic A benchmark (regime-filter-only with Mom30) improves from approximately +1.30pp CAGR (v1.4) to +1.42pp (v1.5).
+
+v1.4's primary improvement vs v1.3.1 was methodological as well as mechanical. The cross-country validation on 31 years of US data provides substantially stronger empirical evidence that the signal architecture generalizes beyond the Indian sample, addressing the most direct overfitting concern that arises from a 17-year regime-conditional model. The 2013 taper-tantrum failure mode is cleanly addressed (+3.43pp). The G10 gold gate update specifically addresses the 2026 H1 gold-rotation failure mode by adding macro confirmation requirements (INR + US 10Y) on top of the v1.2 momentum gate.
 
 ---
 

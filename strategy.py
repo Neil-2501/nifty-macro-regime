@@ -155,7 +155,8 @@ class SignalCombiner:
                  gold_gate_external=True,
                  gold_gate_upper_cap=0.10,
                  gold_gate_inr_threshold=0.005,
-                 gold_gate_us10y_threshold=0.0):
+                 gold_gate_us10y_threshold=0.0,
+                 gold_require_bear=True):
         self.entry_signals = []
         self.exit_signals = []
         # v1.4: signals that force-flat ONLY on the day they fire (no cooldown
@@ -190,6 +191,14 @@ class SignalCombiner:
         self.gold_gate_upper_cap = gold_gate_upper_cap
         self.gold_gate_inr_threshold = gold_gate_inr_threshold
         self.gold_gate_us10y_threshold = gold_gate_us10y_threshold
+        # v1.5 simple fix for 2019 gold-in-bull anomaly:
+        # When True (default), gold rotation entry requires bear regime
+        # (NIFTY < 100 DMA) as a fourth condition on top of G10 gate. Also
+        # exits gold mid-latch if regime flips from bear to bull. Addresses
+        # the 3-day May 2019 anomaly where slow-stress fired in bull regime
+        # and gold rotation entered, costing -4.34pp. Set False to recover
+        # v1.4 behavior (gold rotation gated only on G10 conditions).
+        self.gold_require_bear = gold_require_bear
 
     def add_entry(self, signal, weight=1.0):
         self.entry_signals.append((signal, weight)); return self
@@ -331,6 +340,12 @@ class SignalCombiner:
                     if "^TNX" in data.columns:
                         us10y_20d_vals = data["^TNX"].pct_change(20).values
 
+                # v1.5 fix: bull mask for the bear-regime gate condition.
+                # Required when gold_require_bear=True (default).
+                bull_vals = None
+                if self.gold_require_bear and self.regime_filter is not None:
+                    bull_vals = self.regime_filter.bull_mask(data).values
+
                 stress_vals  = stress_flat_mask.values
                 nifty_vals   = nifty_position.values
                 gold_10d_vals = gold_10d.values
@@ -368,19 +383,23 @@ class SignalCombiner:
                             in_latch = True
                             exited_gold_this_latch = False
                             g10 = gold_10d_vals[i]
-                            if entry_gate_passes(i, g10):
+                            is_bull = bull_vals is not None and bull_vals[i]
+                            if entry_gate_passes(i, g10) and not is_bull:
                                 in_gold = True
                                 gp[i] = 1.0
                             else:
                                 in_gold = False
                                 # gp[i] stays 0
                         else:
-                            # Continuing latch — exit rule preserved (gold 10d
-                            # turning negative is the one-way exit door)
+                            # Continuing latch — exit rules:
+                            # (1) gold 10d turning negative (one-way door)
+                            # (2) regime flipping to bull mid-latch (v1.5 fix)
                             if in_gold:
                                 g10 = gold_10d_vals[i]
                                 if not np.isnan(g10) and g10 < 0:
-                                    # Gold momentum turned negative — exit
+                                    in_gold = False
+                                    exited_gold_this_latch = True
+                                elif bull_vals is not None and bull_vals[i]:
                                     in_gold = False
                                     exited_gold_this_latch = True
                             if in_gold:
