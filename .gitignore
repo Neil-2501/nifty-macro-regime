@@ -173,3 +173,7 @@ test_v13_oos_and_costs.py
 verify_index_data.py
 v13_full_output.txt
 parked/
+
+# yfinance cache (regenerated on demand by experiments/ scripts)
+_yf_cache.pkl
+*.pkl
