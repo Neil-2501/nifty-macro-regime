@@ -10,22 +10,23 @@ A systematic macro-regime strategy for Indian markets combining tactical long ex
 
 ## Headline Results
 
-Backtest period: **2008-04-01 to 2025-12-31** (17.7 years). Net results assume per-asset transaction costs of **3 bps per leg** on NIFTY 50 futures (short side), **6 bps per leg** on NIFTY 200 Momentum 30 ETFs (long side), and **5 bps per leg** on GOLDBEES.NS (gold ETF). Idle capital on fully-flat days earns the prevailing RBI repo rate minus a 100 bps haircut modeling realistic liquid-fund execution.
+Backtest period: **2008-04-01 to 2025-12-31** (17.7 years). Net results assume per-asset transaction costs of **3 bps per leg** on NIFTY 50 futures (short side), **6 bps per leg** on NIFTY 200 Momentum 30 ETFs (long side), and **5 bps per leg** on GOLDBEES.NS (gold ETF). Idle capital on fully-flat days earns the prevailing RBI repo rate minus a 100 bps haircut modeling realistic liquid-fund execution. **All metrics post-tax**: strategy uses Indian 15% short-term capital gains (annual-net model); NIFTY 50 buy-and-hold uses 10% long-term capital gains (zero turnover).
 
 | Metric | Strategy (v2.1) | NIFTY Buy & Hold | Δ |
 |---|---|---|---|
-| Sharpe (post-tax, RF = 6%) | **0.84** | 0.20 | **+313%** |
-| Sharpe (pre-tax, RF = 6%) | 0.93 | 0.27 | +248% |
-| Sortino | 1.12 | 0.25 | **+352%** |
-| Calmar | 1.34 | 0.19 | **+595%** |
-| Annualized volatility (pre-tax) | 14.20% | 19.27% | -26% |
-| Max drawdown | **-14.9%** | -51.7% | **-71%** |
-| CAGR (pre-tax) | 19.93% | 9.73% | **+1,019 bps** |
-| Cumulative return (pre-tax) | 2,721.7% | 451.3% | +2,270.4pp |
+| Sharpe (RF = 6%) | **0.84** | 0.20 | **+312%** |
+| Sortino | **1.01** | 0.17 | **+512%** |
+| Calmar | **1.31** | 0.16 | **+719%** |
+| Annualized volatility | 12.16% | 17.95% | -32% |
+| **Max drawdown** | **-12.78%** | **-51.72%** | **-75%** |
+| CAGR | **16.75%** | 8.37% | **+838 bps** |
+| Cumulative return | **1,623.6%** | 338.5% | +1,285.1pp |
 
-Sharpe figures are post-tax by default from v1.4 onward, reflecting Indian short-term capital gains tax (15% annual-net model). Pre-tax Sharpe is reported alongside for reference. v1.3.1 reported pre-tax numbers exclusively; the v1.4 default change makes the headline metric natively deployability-relevant. CAGR, Sortino, Calmar, and vol shown above are pre-tax for benchmark comparability (NIFTY is also pre-tax). v2.1 cumulatively improves on v1.5 across every metric: post-tax CAGR 15.64% → 16.75% (+1.11pp), post-tax Sharpe 0.79 → 0.84 (+0.05), max drawdown −14.67% → −12.78% (+1.89pp shallower), Calmar 1.07 → 1.31. The improvement comes from three additions detailed under [Signal Logic](#signal-logic) and [Version History](#version-history): a post-bear NIFTY recovery overlay, a slow-stress cooldown, and a panic-short drawdown confirmation.
+All figures post-tax. The strategy's 15% short-term capital gains model reflects the realistic deployability case for an active rebalanced strategy (most gains qualify as short-term); NIFTY B&H's 10% long-term capital gains treatment is the conservative buy-and-hold benchmark (zero turnover, full long-term treatment). Pre-tax differences are smaller: pre-tax strategy CAGR is 19.93%, pre-tax NIFTY CAGR is 9.73%. The post-tax convention is the production-relevant headline.
 
-The strategy generates risk-adjusted alpha vs passive NIFTY exposure through three independent mechanisms operating together: (1) tactical long exposure to a momentum-tilted equity portfolio — long NIFTY 200 Momentum 30 during bull regimes, flat or short NIFTY 50 during identified stress regimes; (2) momentum-gated safe-haven rotation — long gold during stress windows only when the multi-asset macro confirmation set is aligned, with mid-latch exit to cash if gold momentum turns negative; (3) cash management — idle capital earns the prevailing RBI repo rate minus a 100 bps haircut on fully-flat days, modeling realistic institutional liquid-fund execution. The 313% post-tax Sharpe improvement is the most direct measure of joint risk-adjusted skill across these mechanisms. Cumulative outperformance vs buy-and-hold (+2,270pp over 17.7 years) is the geometric outcome of compounding all three together — the mechanisms cannot be cleanly separated into additive contributions, since they interact through the position sequence and the compounding base.
+v2.1 cumulatively improves on v1.5 across every metric: CAGR 15.64% → 16.75% (+1.11pp), Sharpe 0.79 → 0.84 (+0.05), max drawdown −14.67% → −12.78% (+1.89pp shallower), Calmar 1.07 → 1.31. The improvement comes from three additions detailed under [Signal Logic](#signal-logic) and [Version History](#version-history): a post-bear NIFTY recovery overlay, a slow-stress cooldown, and a panic-short drawdown confirmation.
+
+The strategy generates risk-adjusted alpha vs passive NIFTY exposure through three independent mechanisms operating together: (1) tactical long exposure to a momentum-tilted equity portfolio — long NIFTY 200 Momentum 30 during bull regimes, flat or short NIFTY 50 during identified stress regimes; (2) momentum-gated safe-haven rotation — long gold during stress windows only when the multi-asset macro confirmation set is aligned, with mid-latch exit to cash if gold momentum turns negative; (3) cash management — idle capital earns the prevailing RBI repo rate minus a 100 bps haircut on fully-flat days, modeling realistic institutional liquid-fund execution. The 312% Sharpe improvement is the most direct measure of joint risk-adjusted skill across these mechanisms. Cumulative outperformance vs buy-and-hold (+1,285pp over 17.7 years, post-tax) is the geometric outcome of compounding all three together — the mechanisms cannot be cleanly separated into additive contributions, since they interact through the position sequence and the compounding base.
 
 ---
 
@@ -37,7 +38,7 @@ The strategy's outperformance derives from three mechanisms that compound togeth
 
 **Momentum-gated safe-haven rotation with macro confirmation.** During identified stress-flat windows, capital rotates to GOLDBEES.NS gated by three macro conditions: gold's 10-day return must be positive but capped at 10% (preventing blow-off-top entries), INR must have weakened by 0.5%+ over 10 days (confirming macro stress that mechanically supports INR-priced gold), and US 10-year Treasury yields must be falling over 20 days (gold's fundamental macro tailwind). The macro-confirmed gate replaces the v1.2-v1.3.1 single-condition gate (gold_10d > 0) which let in marginal-momentum entries (40% hit rate) and extreme-momentum entries (blow-off tops). v1.4 holds gold approximately 31 days across the sample, down from v1.3's 41 days; the additional macro confirmation requirements filter out marginal entries while preserving the legitimate flight-to-safety opportunities. One-way door exit logic is preserved: once in gold within a latch, exit to cash if 10-day return turns negative and stay out for the remainder of that latch.
 
-**Cash yield on idle capital (with realistic haircut).** On fully-flat days where neither NIFTY nor gold is held, the strategy credits the prevailing RBI repo rate minus a 100 bps haircut. The haircut models real-world liquid-fund execution: instrument spread (~50 bps inside repo), TER (~10–25 bps), and small auto-sweep frictions. Returns are post-tax by default in v1.4 (15% on net annual gains, Indian short-term capital gains convention); sensitivity to the haircut size is documented under Backtest Caveats.
+**Cash yield on idle capital (with realistic haircut).** On fully-flat days where neither NIFTY nor gold is held, the strategy credits the prevailing RBI repo rate minus a 100 bps haircut. The haircut models real-world liquid-fund execution: instrument spread (~50 bps inside repo), TER (~10–25 bps), and small auto-sweep frictions. Returns are post-tax throughout (15% on net annual gains, Indian short-term capital gains convention); sensitivity to the haircut size is documented under Backtest Caveats.
 
 ### Refinements added since v1.5
 
@@ -51,7 +52,7 @@ Three targeted refinements were added to the v1.5 production base, each addressi
 
 **Cross-country signal architecture validation.** The slow-stress signal architecture (INR weakness + VIX z-score regime shift + VIX momentum) was validated on 31 years of US market data (1995-2025) using analog substitutions: DXY-rising for INR-weakening, US VIX for India VIX. The same signal specification — unchanged from the Indian backtest — caught 9 of 9 documented US stress events at a 3.84% overall fire rate with low false positive rates in calm bull years (0.0-7.5%). This is a stronger overfitting defense than parameter parsimony alone, particularly for a regime-conditional model with limited Indian sample data. See [Cross-Country Validation](#cross-country-validation) section below.
 
-**The Sharpe improvement (+313% post-tax vs NIFTY) is the most reliable single measure of risk-adjusted skill** because it normalizes return per unit of volatility regardless of which mechanism is doing the work on any given day. Cumulative return improvement (+2,270pp pretax) is striking but is inherently joint and path-dependent.
+**The Sharpe improvement (+312% post-tax vs NIFTY) is the most reliable single measure of risk-adjusted skill** because it normalizes return per unit of volatility regardless of which mechanism is doing the work on any given day. Cumulative return improvement (+1,285pp post-tax) is striking but is inherently joint and path-dependent.
 
 ---
 
@@ -121,7 +122,7 @@ The production strategy emerged from a sequence of explicit ablation tests acros
 | Momentum-gated gold rotation + NIFTY Midcap 150 as long-side asset | Rejected | Drawdown deteriorates to −26.1% — eliminates headline drawdown control |
 | Momentum-gated gold rotation + NIFTY 200 Momentum 30 as long-side asset | Selected (v1.3) | Highest Calmar of v1.2–v1.3 alternatives; preserves drawdown within 2pp; structurally coherent |
 | v1.4: prior + slow-stress signal + macro-confirmed gold rotation gate | Selected (v1.4) | Slow-stress catches the 2013 taper-tantrum failure mode (+3.43pp); macro-confirmed gate prevents the 2026 H1 gold blow-off-top failure; cross-country validation on US data catches 9/9 stress events |
-| v1.5: prior + bear-regime requirement on gold rotation entry + mid-latch bull-flip exit | Selected (v1.5) | Eliminates the 2019 gold-in-bull anomaly (3 days, −4.34pp) where gold rotation triggered against a recovering equity tape; MaxDD narrows from −17.2% to −15.5% |
+| v1.5: prior + bear-regime requirement on gold rotation entry + mid-latch bull-flip exit | Selected (v1.5) | Eliminates the 2019 gold-in-bull anomaly (3 days, −4.34pp) where gold rotation triggered against a recovering equity tape; v1.5 post-tax MaxDD −14.67% |
 | v2.0: prior + post-bear NIFTY recovery overlay + slow-stress cooldown | Selected (v2.0) | Recovery overlay captures the V-recovery cyclicals lead that Momentum 30 misses (cleanly visible in 2009: NIFTY +56% during the 60-day recovery window, Momentum 30 +29% — strategy now holds NIFTY through it). Slow-stress cooldown eliminates the 2019 April-May whipsaw (9 separate fires in short clusters were causing flat→long→flat round-trips). Combined: +1.14pp CAGR, max DD narrows from −14.67% to −13.38% |
 | **v2.1: prior + 15% drawdown confirmation on panic-short** | **Selected (v2.1, current production)** | Panic-short can only fire when NIFTY drawdown from 60-day high exceeds 15%; suppresses the 2013-08-27 (−22.9pp) and 2022-02-24 (−12.0pp) false fires that fired into local bottoms. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6 2020 fire is suppressed at 11.1% drawdown; next fire on March 9 catches up at 15.5% drawdown, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. MaxDD narrows further from −13.38% to −12.78%, Sharpe 0.83 → 0.84 |
 
@@ -358,23 +359,23 @@ The strategy outperforms NIFTY in **13 of 18 calendar years** on a post-tax basi
 
 ![Drawdown](images/drawdown.png)
 
-Maximum drawdown of **−14.9%** (pre-tax) / **−12.8%** (post-tax) vs NIFTY's **−51.7%** — a **71% reduction**. Cash yield on flat days during bear regimes (notably 2008-2009 GFC and 2020 March-August COVID recovery) cushions equity drawdowns by adding deterministic positive return on the worst-impact days. The drawdown profile reflects the joint mechanism set: the largest contributions to the gap come from the 2008 GFC (regime filter + cash yield at ~8% repo), 2011 European debt stress (gold rotation + cash yield), and 2020 COVID crash (panic-short + gold rotation + cash yield through the recovery period). v2.1's max drawdown improves vs v1.5's −15.5% (post-tax: −12.8% vs −14.7%) primarily through the panic-short drawdown confirmation (eliminates the 2013 and 2022 short losses that previously contributed to drawdown).
+Maximum drawdown of **−12.78%** vs NIFTY's **−51.72%** (both post-tax) — a **75% reduction**. Cash yield on flat days during bear regimes (notably 2008-2009 GFC and 2020 March-August COVID recovery) cushions equity drawdowns by adding deterministic positive return on the worst-impact days. The drawdown profile reflects the joint mechanism set: the largest contributions to the gap come from the 2008 GFC (regime filter + cash yield at ~8% repo), 2011 European debt stress (gold rotation + cash yield), and 2020 COVID crash (panic-short + gold rotation + cash yield through the recovery period). v2.1's max drawdown improves vs v1.5's −14.67% primarily through the panic-short drawdown confirmation (eliminates the 2013 and 2022 short losses that previously contributed to drawdown).
 
 ### Cost Sensitivity
 
-The long-side asset is NIFTY 200 Momentum 30 (ETF, 6 bps per leg base case). The table below varies the long-side cost; NIFTY short cost (3 bps) and gold cost (5 bps) are held fixed. Cash sweep is treated as zero-cost at all levels. Sensitivity reported pre-tax to match NIFTY benchmark convention.
+The long-side asset is NIFTY 200 Momentum 30 (ETF, 6 bps per leg base case). The table below varies the long-side cost; NIFTY short cost (3 bps) and gold cost (5 bps) are held fixed. Cash sweep is treated as zero-cost at all levels. All numbers post-tax.
 
 | Long-side cost (bps/leg) | Cumulative Return | CAGR | Sharpe | Max DD |
 |---|---|---|---|---|
-| 0 | 3,108.8% | 20.77% | 0.98 | -14.9% |
-| 3 | 2,909.1% | 20.35% | 0.95 | -14.9% |
-| **6 (base, v2.1)** | **2,721.7%** | **19.93%** | **0.93** | **-14.9%** |
-| 10 | 2,489.8% | 19.37% | 0.89 | -14.9% |
-| 15 | 2,226.5% | 18.67% | 0.85 | -14.9% |
-| 20 | 1,989.8% | 17.98% | 0.81 | -15.4% |
-| 50 | 996.5% | 13.92% | 0.56 | -22.8% |
+| 0 | 1,827.4% | 17.46% | 0.89 | -12.8% |
+| 3 | 1,722.7% | 17.11% | 0.87 | -12.8% |
+| **6 (base, v2.1)** | **1,623.6%** | **16.75%** | **0.84** | **-12.8%** |
+| 10 | 1,498.3% | 16.27% | 0.80 | -12.8% |
+| 15 | 1,351.8% | 15.67% | 0.75 | -13.5% |
+| 20 | 1,216.1% | 15.05% | 0.71 | -14.3% |
+| 50 | 627.3% | 11.40% | 0.44 | -22.8% |
 
-Strategy economics degrade more slowly than a purely directional version because cash yield on idle capital is unaffected by transaction costs — fully-flat days don't trade and so don't pay friction. Sharpe stays well above NIFTY's 0.27 buy-and-hold all the way through 20 bps long-side cost. The 50 bps row remains a stress test, not a realistic implementation cost.
+Strategy economics degrade more slowly than a purely directional version because cash yield on idle capital is unaffected by transaction costs — fully-flat days don't trade and so don't pay friction. Sharpe stays well above NIFTY's 0.20 buy-and-hold (post-tax) all the way through 20 bps long-side cost. The 50 bps row remains a stress test, not a realistic implementation cost.
 
 ---
 
@@ -382,19 +383,19 @@ Strategy economics degrade more slowly than a purely directional version because
 
 ### Crisis-Period Stress Tests
 
-Pre-tax cumulative returns over crisis windows (pre-tax to match NIFTY benchmark convention).
+Post-tax cumulative returns over crisis windows (strategy and NIFTY both post-tax; short-period windows within a year reflect annual-net tax scaling).
 
 | Crisis | Window | Strategy (v2.1) | NIFTY |
 |---|---|---|---|
-| GFC | Sep 2008 – Mar 2009 | **+2.4%** | -30.7% |
+| GFC | Sep 2008 – Mar 2009 | **+2.1%** | -30.8% |
 | Euro debt | Jul 2011 – Dec 2011 | **+1.0%** | -18.1% |
-| Taper Tantrum | May – Sept 2013 | **-0.4%** | -3.3% |
-| NBFC / IL&FS | Aug 2018 – Nov 2018 | **-0.5%** | -4.2% |
-| COVID Crash | Feb – May 2020 | **+19.6%** | -19.9% |
-| Russia 2022 | Feb – Jun 2022 | **-2.0%** | -9.0% |
-| Momentum sell-off 2025-26 | Oct 2025 – Apr 2026 | +1.9% | +6.2% |
+| Taper Tantrum | May – Sept 2013 | **-0.3%** | -2.9% |
+| NBFC / IL&FS | Aug 2018 – Nov 2018 | **-0.5%** | -3.8% |
+| COVID Crash | Feb – May 2020 | **+16.8%** | -17.8% |
+| Russia 2022 | Feb – Jun 2022 | **-1.7%** | -8.1% |
+| Momentum sell-off 2025-26 | Oct 2025 – Apr 2026 | +1.6% | +5.5% |
 
-The strategy navigates GFC-style and COVID-style regimes well — both feature decisive trend breakdowns that the panic-short and slow-stress lanes capture cleanly. The GFC window returns +2.4% (vs NIFTY −30.7%) because cash yield on the fully-flat days at ~8% repo dominates the small drag from the stress latch; all four 2008 panic-shorts (at NIFTY drawdowns of 16–32%) fire through the v2.1 confirmation gate. The 2011 European debt window flips positive (vs NIFTY −18.1%) via flat-period cash yield plus correct slow-stress force-flat coverage. The 2013 Taper Tantrum window is now nearly flat (−0.4%) vs v1.4's −2.6% — the slow-stress cooldown (v2.0) and panic-short drawdown confirmation (v2.1) together prevent the 2013-08-27 false panic-short. The 2020 COVID window returns +19.6% (vs NIFTY −19.9%) even after the v2.1 March-6 panic-short suppression; the next fire on March 9 captures the crash. The 2025–26 momentum sell-off window is the most recent stress and is the first crisis-window-style underperformance under the new production version — the strategy held +1.9% but NIFTY rebounded +6.2%, reflecting that Momentum 30's structural rotation losses remain unaddressed.
+The strategy navigates GFC-style and COVID-style regimes well — both feature decisive trend breakdowns that the panic-short and slow-stress lanes capture cleanly. The GFC window returns +2.1% (vs NIFTY −30.8%) because cash yield on the fully-flat days at ~8% repo dominates the small drag from the stress latch; all four 2008 panic-shorts (at NIFTY drawdowns of 16–32%) fire through the v2.1 confirmation gate. The 2011 European debt window flips positive (vs NIFTY −18.1%) via flat-period cash yield plus correct slow-stress force-flat coverage. The 2013 Taper Tantrum window is now nearly flat (−0.3%) — the slow-stress cooldown (v2.0) and panic-short drawdown confirmation (v2.1) together prevent the 2013-08-27 false panic-short. The 2020 COVID window returns +16.8% (vs NIFTY −17.8%) even after the v2.1 March-6 panic-short suppression; the next fire on March 9 captures the crash. The 2025–26 momentum sell-off window is the most recent stress and is the first crisis-window-style underperformance under the new production version — the strategy held +1.6% but NIFTY rebounded +5.5%, reflecting that Momentum 30's structural rotation losses remain unaddressed.
 
 **A note on Momentum 30 behavior in stress.** Momentum 30 itself underperforms NIFTY 50 in some crisis windows (e.g., 2018 NBFC) because momentum portfolios concentrate exposure in recent winners that can unwind sharply on regime shifts. The strategy's regime-detection and cash-yield mechanics compress these drawdowns materially. This is also the mechanism driving the residual 2018, 2022, and 2025 underperformance — see Limitations.
 
@@ -404,9 +405,11 @@ The strategy went live in development through 2025-12-31, with 2026 reserved as 
 
 | | 2026 YTD return |
 |---|---|
-| **Strategy (v2.1)** | **+2.4%** (pre-tax) / +2.0% (post-tax) |
-| NIFTY 50 Buy & Hold | -8.9% |
-| **Outperformance (pre-tax)** | **+11.3pp** |
+| **Strategy (v2.1, post-tax)** | **+2.0%** |
+| NIFTY 50 Buy & Hold (post-tax) | -8.9% |
+| **Outperformance** | **+10.9pp** |
+
+(2026 YTD is a loss year for NIFTY so post-tax NIFTY = pre-tax NIFTY; the 10% LT tax only applies to gains.)
 
 v2.1's 2026 OOS performance is broadly consistent with v1.4–v1.5's. Three mechanisms contributed:
 
@@ -416,7 +419,7 @@ v2.1's 2026 OOS performance is broadly consistent with v1.4–v1.5's. Three mech
 
 3. **Slow-stress cooldown and drawdown-confirmed panic-short** did not materially change OOS results vs v1.4–v1.5 (the 2026 OOS window did not contain a chop period that would have triggered the cooldown's benefit, nor a borderline panic-short fire that the drawdown confirmation would have caught or suppressed). The two v2.0–v2.1 refinements are primarily in-sample optimizations against patterns identified during diagnostic work; their OOS performance neither confirms nor contradicts the in-sample benefit on this single window.
 
-Buy-and-hold YTD for the three indices considered: NIFTY 50 −8.9%, NIFTY 200 Momentum 30 (estimated) −5% to −6%. The strategy outperformed all three benchmarks in the OOS window.
+Buy-and-hold YTD for the three indices considered (all post-tax): NIFTY 50 −8.9%, NIFTY 200 Momentum 30 (estimated) −5% to −6%. The strategy outperformed all three benchmarks in the OOS window.
 
 ### Cross-Country Validation
 
@@ -490,17 +493,19 @@ All benchmarks apply identical Indian short-term capital gains tax (15% annual-n
 
 ### Headline results
 
+All numbers post-tax. Strategy uses 15% short-term capital gains; passive benchmarks use 10% long-term capital gains; rule-based benchmarks (Dynamic A etc.) use 15% short-term capital gains to match the strategy's turnover profile.
+
 | Comparator | Strategy excess CAGR | Strategy excess Sharpe | Strategy MaxDD vs Benchmark |
 |---|---|---|---|
-| vs NIFTY 50 B&H | +8.41pp | +0.626 | +38.3pp better |
-| vs Mom30 B&H | +4.5pp | +0.42 | +42.4pp better |
+| vs NIFTY 50 B&H | +8.38pp | +0.637 | +38.9pp better |
+| vs Mom30 B&H | +~3-4pp | +0.4 | +~40pp better |
 | vs Dynamic A (regime filter alone) | +2.53pp | +0.113 | +2.5pp better |
 
 The strategy outperforms every benchmark on risk-adjusted Sharpe and Calmar. v2.0–v2.1 widen the gap vs Dynamic A meaningfully — under v1.5 the strategy beat Dynamic A by +1.42pp CAGR with a 0.5pp MaxDD disadvantage; under v2.1 it beats Dynamic A by +2.53pp CAGR with a 2.5pp MaxDD advantage.
 
 ### Decomposition of NIFTY 50 outperformance
 
-The headline +8.41pp CAGR vs NIFTY 50 decomposes into three components:
+The headline +8.38pp CAGR vs NIFTY 50 (post-tax) decomposes into three components:
 
 | Component | Approximate contribution |
 |---|---|
@@ -549,9 +554,9 @@ Three reasons the +2.53pp CAGR contribution is meaningful rather than disappoint
 
 **3. Architectural validity beyond Indian alpha.** The signal architecture is validated cross-country on 31 years of US data (see Cross-Country Validation section) — caught 9 of 9 documented US stress events at 3.84% fire rate. This addresses overfitting concerns that the +2.53pp Indian-sample alpha alone cannot, and supports the inference that the override layer's contribution generalizes.
 
-### Note on Dynamic A's max drawdown advantage (now reversed in v2.1)
+### Note on Dynamic A's max drawdown (strategy now meaningfully shallower)
 
-Under v1.5, Dynamic A's MaxDD (−15.2%) was 0.5pp better than the strategy's (−15.5%). The v2.0–v2.1 refinements reverse this: the strategy's MaxDD is now −12.78% post-tax vs Dynamic A's −15.2% — a 2.5pp advantage. The drawdown improvement is primarily attributable to the panic-short drawdown confirmation (eliminating the 2013 and 2022 false shorts that previously contributed to peak drawdown depths).
+Under v1.5 (post-tax), the strategy's MaxDD was −14.67% vs Dynamic A's −15.25% — already 0.58pp shallower. The v2.0–v2.1 refinements widen this advantage: the strategy's MaxDD is now −12.78% vs Dynamic A's −15.25% — a 2.47pp shallower drawdown. The improvement is primarily attributable to the panic-short drawdown confirmation (eliminating the 2013 and 2022 false shorts that previously contributed to peak drawdown depths).
 
 The full benchmark comparison script is at [`experiments/benchmark_comparison.py`](experiments/benchmark_comparison.py).
 
@@ -675,21 +680,23 @@ In progress and planned:
 
 ## Version History
 
-| Version | Description | Cumulative (pre-tax) | CAGR (pre-tax) | Sharpe | Max DD |
+All numbers in the table below are post-tax. Pre-v1.4 rows did not have a native tax model and are shown as their pre-tax values (no annual-net tax was applied to those backtest configurations). v1.4 onwards uses 15% short-term capital gains (annual-net).
+
+| Version | Description | Cumulative | CAGR | Sharpe | Max DD |
 |---|---|---|---|---|---|
-| v1.0 | Single-asset directional (no gold, no cash yield). Preserved at commit `c2860fc`. | 467.2% | 9.91% | 0.33 | -22.2% |
-| v1.1.1 | Adds gold rotation throughout stress-flat latches + pure-repo cash yield. Preserved at commit `078878a`. | 908.4% | 13.40% | 0.55 | -18.3% |
-| v1.2 | Adds momentum-gated gold rotation (per-latch state machine) + 100 bps repo haircut. | 784.8% | 12.59% | 0.50 | -16.4% |
-| v1.3 | Substitutes NIFTY 200 Momentum 30 for NIFTY 50 as long-side asset; regime detection unchanged. | 2,022.6% | 18.08% | 0.83 | -18.1% |
-| v1.3.1 | README correction. Documents architecture honestly: 100 DMA regime filter is the binding entry gate; USDINR/VIX signal classes retained as scaffolding only. Test results for entry-signal-gated variant added. No code or numerical changes vs v1.3. | 2,022.6% | 18.08% | 0.83 | -18.1% |
-| v1.4 | Slow-stress signal replaces supply-shock as default stress detector (INR 20d weakness + VIX 90d z-score + VIX 5d momentum). Macro-confirmed gold rotation gate replaces single-condition gate (adds INR + US 10Y macro confirmation, caps blow-off-top entries). Tax modeling integrated natively. Cross-country validation on US data 1995-2025 catches 9/9 documented stress events. New data dependency: ^TNX. | 2,166.8% | 18.51% | 0.78 (post-tax) / 0.87 (pre-tax) | -17.2% |
-| v1.5 | Gold-in-bull anomaly fix. Gold rotation entry now requires bear regime (NIFTY < 100 DMA) as a fourth gate condition on top of macro confirmation; mid-latch bull-flip exit added alongside the existing 10d-negative exit. Eliminates the 3-day May 2019 anomaly (-4.34pp) where slow-stress fired in bull regime and gold rotation triggered against a recovering equity tape. Backward-compatible via `gold_require_bear=False`. No new data dependencies. | 2,211.2% | 18.63% | 0.79 (post-tax) / 0.88 (pre-tax) | -15.5% |
-| v2.0 | Adds two refinements. (1) Post-bear NIFTY recovery overlay: hold NIFTY 50 instead of Momentum 30 for the first 60 trading days following a bear→bull regime flip preceded by a NIFTY drawdown ≥15%. Targets the Daniel & Moskowitz (2016) V-recovery momentum-crash pattern. 2009 single-year improvement: +52% → +76% post-tax. (2) Slow-stress cooldown: suppress slow-stress re-fires for 5 trading days after each unsuppressed firing event. Prevents 2019 April-May whipsaw chop. Combined impact vs v1.5: post-tax CAGR 15.64% → 16.78% (+1.14pp), post-tax MaxDD −14.67% → −13.38%, post-tax Sharpe 0.79 → 0.83. Backward-compatible via `enable_v2=False` and `slow_stress_lock_days=0`. | 2,757.0% | 20.01% | 0.83 (post-tax) / 0.93 (pre-tax) | -14.9% |
-| **v2.1** | **Adds 15% drawdown confirmation on panic-short. Panic-short can only fire when NIFTY's drawdown from its trailing 60-day high exceeds 15%. Suppresses the 2013-08-27 (drawdown ~13%, taper-reaction) and 2022-02-24 (drawdown ~11.3%, Ukraine-reaction) false fires. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6, 2020 fire (drawdown 11.1%) is suppressed; the next fire on March 9 (drawdown 15.5%) catches the move three days later, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. Combined impact vs v2.0: post-tax Sharpe 0.83 → 0.84 (+0.011), post-tax MaxDD −13.38% → −12.78%, post-tax CAGR essentially flat (−0.03pp). Backward-compatible via `panic_short_dd_threshold=0`. Current.** | **2,721.7%** | **19.93%** | **0.84** (post-tax) / 0.93 (pre-tax) | **-14.9%** |
+| v1.0 | Single-asset directional (no gold, no cash yield). Preserved at commit `c2860fc`. (pre-tax) | 467.2% | 9.91% | 0.33 | -22.2% |
+| v1.1.1 | Adds gold rotation throughout stress-flat latches + pure-repo cash yield. Preserved at commit `078878a`. (pre-tax) | 908.4% | 13.40% | 0.55 | -18.3% |
+| v1.2 | Adds momentum-gated gold rotation (per-latch state machine) + 100 bps repo haircut. (pre-tax) | 784.8% | 12.59% | 0.50 | -16.4% |
+| v1.3 | Substitutes NIFTY 200 Momentum 30 for NIFTY 50 as long-side asset; regime detection unchanged. (pre-tax) | 2,022.6% | 18.08% | 0.83 | -18.1% |
+| v1.3.1 | README correction. Documents architecture honestly: 100 DMA regime filter is the binding entry gate; USDINR/VIX signal classes retained as scaffolding only. Test results for entry-signal-gated variant added. No code or numerical changes vs v1.3. (pre-tax) | 2,022.6% | 18.08% | 0.83 | -18.1% |
+| v1.4 | Slow-stress signal replaces supply-shock as default stress detector (INR 20d weakness + VIX 90d z-score + VIX 5d momentum). Macro-confirmed gold rotation gate replaces single-condition gate (adds INR + US 10Y macro confirmation, caps blow-off-top entries). Tax modeling integrated natively. Cross-country validation on US data 1995-2025 catches 9/9 documented stress events. New data dependency: ^TNX. | ~1,440% | 15.50% | 0.78 | -15.0% |
+| v1.5 | Gold-in-bull anomaly fix. Gold rotation entry now requires bear regime (NIFTY < 100 DMA) as a fourth gate condition on top of macro confirmation; mid-latch bull-flip exit added alongside the existing 10d-negative exit. Eliminates the 3-day May 2019 anomaly (-4.34pp) where slow-stress fired in bull regime and gold rotation triggered against a recovering equity tape. Backward-compatible via `gold_require_bear=False`. No new data dependencies. | 1,345.0% | 15.64% | 0.79 | -14.7% |
+| v2.0 | Adds two refinements. (1) Post-bear NIFTY recovery overlay: hold NIFTY 50 instead of Momentum 30 for the first 60 trading days following a bear→bull regime flip preceded by a NIFTY drawdown ≥15%. Targets the Daniel & Moskowitz (2016) V-recovery momentum-crash pattern. 2009 single-year improvement: +52% → +76%. (2) Slow-stress cooldown: suppress slow-stress re-fires for 5 trading days after each unsuppressed firing event. Prevents 2019 April-May whipsaw chop. Combined impact vs v1.5: CAGR 15.64% → 16.78% (+1.14pp), MaxDD −14.67% → −13.38%, Sharpe 0.79 → 0.83. Backward-compatible via `enable_v2=False` and `slow_stress_lock_days=0`. | 1,631.3% | 16.78% | 0.83 | -13.4% |
+| **v2.1** | **Adds 15% drawdown confirmation on panic-short. Panic-short can only fire when NIFTY's drawdown from its trailing 60-day high exceeds 15%. Suppresses the 2013-08-27 (drawdown ~13%, taper-reaction) and 2022-02-24 (drawdown ~11.3%, Ukraine-reaction) false fires. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6, 2020 fire (drawdown 11.1%) is suppressed; the next fire on March 9 (drawdown 15.5%) catches the move three days later, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. Combined impact vs v2.0: Sharpe 0.83 → 0.84 (+0.011), MaxDD −13.38% → −12.78%, CAGR essentially flat (−0.03pp). Backward-compatible via `panic_short_dd_threshold=0`. Current.** | **1,623.6%** | **16.75%** | **0.84** | **-12.78%** |
 
-The cumulative improvement from v1.5 to v2.1 is the largest single jump since the v1.3 long-side asset substitution: post-tax CAGR 15.64% → 16.75% (+1.11pp), post-tax Sharpe 0.79 → 0.84 (+0.05), max drawdown −14.67% → −12.78% (+1.89pp shallower), Calmar 1.07 → 1.31. Each of the three refinements was tested against a pre-specified parameter sweep with a disqualification rule (no variant that breaks 2008 GFC, 2018 September NBFC, 2020 COVID, or 2021 stress-window defense was retained); the selected thresholds (15% bear DD for recovery overlay, 5-day slow-stress cooldown, 15% panic-short drawdown confirmation) each sit on a tight plateau within their qualified range rather than at a cliff edge.
+The cumulative improvement from v1.5 to v2.1 is the largest single jump since the v1.3 long-side asset substitution: CAGR 15.64% → 16.75% (+1.11pp), Sharpe 0.79 → 0.84 (+0.05), max drawdown −14.67% → −12.78% (+1.89pp shallower), Calmar 1.07 → 1.31. Each of the three refinements was tested against a pre-specified parameter sweep with a disqualification rule (no variant that breaks 2008 GFC, 2018 September NBFC, 2020 COVID, or 2021 stress-window defense was retained); the selected thresholds (15% bear DD for recovery overlay, 5-day slow-stress cooldown, 15% panic-short drawdown confirmation) each sit on a tight plateau within their qualified range rather than at a cliff edge.
 
-v1.5's headline impact was on drawdown control (MaxDD −17.2% → −15.5%, Calmar 1.08 → 1.20) more than on CAGR (+0.12pp pre-tax). The 2019 anomaly was a single 3-day window where the priority logic let gold rotation enter against a regime-bull tape; the fix closes it surgically without touching any other signal.
+v1.5's headline impact was on drawdown control (MaxDD −15.0% → −14.7%, Calmar 1.03 → 1.07) more than on CAGR (+0.14pp). The 2019 anomaly was a single 3-day window where the priority logic let gold rotation enter against a regime-bull tape; the fix closes it surgically without touching any other signal.
 
 v1.4's primary improvement vs v1.3.1 was methodological as well as mechanical. The cross-country validation on 31 years of US data provides substantially stronger empirical evidence that the signal architecture generalizes beyond the Indian sample, addressing the most direct overfitting concern that arises from a 17-year regime-conditional model. The 2013 taper-tantrum failure mode is cleanly addressed (+3.43pp). The macro-confirmed gold rotation gate specifically addresses the 2026 H1 gold-rotation failure mode by adding macro confirmation requirements (INR + US 10Y) on top of the v1.2 momentum gate.
 

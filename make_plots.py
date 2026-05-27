@@ -31,7 +31,7 @@ from strategy import (
     SupplyShockSignal, PanicShortSignal, USDINRSignal, IndiaVIXSignal,
     RegimeFilter, SignalCombiner, MacroStrategy, make_combiner,
     metrics, position_breakdown, build_rbi_repo_rate_series,
-    load_nse_index_csv,
+    load_nse_index_csv, apply_annual_tax,
 )
 
 
@@ -92,17 +92,24 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
     )
 
     res = strategy.run(raw).loc[START:END].copy()
+    # Charts use POST-TAX returns for both strategy and NIFTY so the comparison
+    # is like-for-like and matches the README headline convention (everything
+    # post-tax). Strategy post-tax = 15% short-term cap gains annual-net model.
+    # NIFTY B&H post-tax = 10% long-term cap gains (zero turnover).
+    nifty_posttax = apply_annual_tax(res["nifty_return"].fillna(0.0), tax_rate=0.10)
     res["cumulative_strategy"] = (1 + res["strategy_return"]).cumprod() - 1
-    res["cumulative_nifty"]    = (1 + res["nifty_return"]).cumprod() - 1
+    res["cumulative_nifty"]    = (1 + nifty_posttax).cumprod() - 1
 
     strat_cum = (1 + res["strategy_return"]).cumprod()
-    nifty_cum = (1 + res["nifty_return"]).cumprod()
+    nifty_cum = (1 + nifty_posttax).cumprod()
 
     strat_dd = (strat_cum - strat_cum.cummax()) / strat_cum.cummax()
     nifty_dd = (nifty_cum - nifty_cum.cummax()) / nifty_cum.cummax()
 
     annual_s = (1 + res["strategy_return"]).resample("YE").prod() - 1
-    annual_n = (1 + res["nifty_return"]).resample("YE").prod() - 1
+    annual_n = (1 + nifty_posttax).resample("YE").prod() - 1
+    # Keep raw nifty_return on res for any downstream consumers
+    res["nifty_posttax"] = nifty_posttax
     yearly = pd.DataFrame({
         "year":         [d.year for d in annual_s.index],
         "strategy_ret": annual_s.values * 100,
@@ -121,7 +128,8 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
 
 
 def compute_full_metrics(res):
-    return metrics(res["strategy_return"]), metrics(res["nifty_return"])
+    """Returns (strategy post-tax metrics, NIFTY post-tax metrics)."""
+    return metrics(res["strategy_return"]), metrics(res["nifty_posttax"])
 
 
 # ---------------------------------------------------------------------------
@@ -153,21 +161,21 @@ def _base_ax(ax):
 def plot_equity_curve(bt, out_path):
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     ax.plot(bt["dates"], bt["strategy_cum"],
-            color=BLUE, linewidth=1.5, label="Strategy v2.1 (Mom30 long, 3/5/6 bps + repo-100bps)", zorder=3)
+            color=BLUE, linewidth=1.5, label="Strategy v2.1 (post-tax, 15% STCG)", zorder=3)
     ax.plot(bt["dates"], bt["nifty_cum"],
-            color=GRAY, linewidth=1.5, label="NIFTY 50 Buy & Hold", zorder=2)
+            color=GRAY, linewidth=1.5, label="NIFTY 50 Buy & Hold (post-tax, 10% LTCG)", zorder=2)
     ax.set_yscale("log")
-    # v2.1: strategy ends ~17x post-tax (~28x pre-tax), NIFTY ~5.5x
-    ax.set_yticks([0.5, 1, 2, 3, 5, 7, 10, 15, 20, 30])
-    ax.set_yticklabels(["0.5x", "1.0x", "2.0x", "3.0x", "5.0x", "7.0x", "10.0x", "15.0x", "20.0x", "30.0x"])
+    # v2.1 post-tax: strategy ends ~17x, NIFTY ~4.4x (post-tax 10% LT)
+    ax.set_yticks([0.5, 1, 2, 3, 5, 7, 10, 15, 20])
+    ax.set_yticklabels(["0.5x", "1.0x", "2.0x", "3.0x", "5.0x", "7.0x", "10.0x", "15.0x", "20.0x"])
     ax.minorticks_off()
-    ax.set_ylim(0.5, 30)
+    ax.set_ylim(0.5, 20)
     ax.set_axisbelow(True)
     ax.yaxis.grid(True, which="major", linestyle="-", linewidth=0.5, alpha=0.3)
     ax.xaxis.grid(False)
     ax.set_ylabel("Cumulative return (x)")
-    ax.set_title("Cumulative Returns — Strategy v2.1 (Mom30 long + recovery overlay + slow-stress cooldown + drawdown-gated panic-short) vs NIFTY 50 (2008-2025)",
-                 fontsize=10, pad=10)
+    ax.set_title("Cumulative Returns (post-tax) — Strategy v2.1 vs NIFTY 50 (2008-2025)",
+                 fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     fig.tight_layout()
@@ -213,7 +221,7 @@ def plot_drawdown(bt, out_path):
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
     ax.set_ylabel("Drawdown")
-    ax.set_title("Drawdown — Strategy v2.1 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
+    ax.set_title("Drawdown (post-tax) — Strategy v2.1 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     fig.tight_layout()
@@ -252,7 +260,7 @@ def plot_yearly_returns(bt, out_path):
     ax.set_xticklabels(years, rotation=45, ha="right", fontsize=8)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax.set_ylabel("Annual return (%)")
-    ax.set_title("Annual Returns — Strategy v2.1 vs NIFTY 50", fontsize=11, pad=10)
+    ax.set_title("Annual Returns (post-tax) — Strategy v2.1 vs NIFTY 50", fontsize=11, pad=10)
     ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     ax.grid(axis="x", visible=False)
