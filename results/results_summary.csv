@@ -1,8 +1,8 @@
-metric,strategy_v13_config6,nifty_buy_hold
-cumulative_return_pct,2022.6,451.9
-cagr_pct,18.08,9.74
-sharpe,0.83,0.27
-sortino,0.97,0.25
-max_drawdown_pct,-18.1,-51.7
-calmar,1.0,0.19
-ann_vol_pct,13.9,19.27
+metric,strategy_v21,nifty_buy_hold
+cumulative_return_pct,1623.6,451.9
+cagr_pct,16.75,9.74
+sharpe,0.84,0.27
+sortino,1.01,0.25
+max_drawdown_pct,-12.8,-51.7
+calmar,1.31,0.19
+ann_vol_pct,12.16,19.27

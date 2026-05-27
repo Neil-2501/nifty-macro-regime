@@ -1,69 +1,52 @@
 """
-Modular Macro Strategy Framework — Indian Markets (canonical, v2.1)
+strategy_lab.py — DEBUGGABLE STRATEGY TESTBED
 
-Production config: Config 7 (v2.1) — Mom30 long-side + V2 post-bear-recovery
-NIFTY 50 hold + 5-day slow-stress lock + 15% drawdown gate on panic-short +
-momentum-gated gold rotation. Result: +16.75% CAGR post-tax, 0.841 Sharpe,
--12.78% MaxDD over 2008-2025 (₹1 → ₹17.26).
+Single self-contained file. Copy of strategy.py with extensions for V2 overlay
+and the recovery-latch state machine. Run via:
 
-Six legacy configs (1-6) retained unchanged for comparison and backward compat:
-  Config 1 — no gold rotation (cash on every flat day, panic-short retained)
-  Config 2 — gold throughout entire stress-flat latch (v1.1.1 production)
-  Config 3 — gold replaces panic short (rotation instead of active short)
-  Config 4 — gold momentum-gated, panic-short retained (v1.2 production)
-  Config 5 — Config 4 + NIFTYMIDCAP150 long-side asset (v1.3)
-  Config 6 — Config 4 + NIFTYMOM30 long-side asset (v1.5 production)
-  Config 7 — Config 6 + V2 overlay + 5-day slow-stress lock +
-             15% drawdown gate on panic-short (v2.1 — production)
+    python experiments/strategy_lab.py
 
-Key v2.1 changes vs v2.0:
-  - Panic-short DD gate: panic-short fires only when NIFTY's drawdown from
-    its trailing 60-day high exceeds 15%. Confirmation requirement: the VIX
-    spike alone doesn't trigger a short; price must have already shown ≥15%
-    damage. Suppresses 2 historically false fires (2013-08-27 taper, 2022-02-24
-    Ukraine reaction). Preserves all 4 of the 2008 GFC panic-shorts. Cost:
-    2 of 16 COVID-2020 fires are suppressed at the early DD<15% stage, but
-    subsequent fires within the run still catch the move. Net effect:
-    flat CAGR (-0.03pp), Sharpe 0.830 → 0.841, MaxDD -13.38% → -12.78%.
+The original strategy.py is UNCHANGED. This file is for testing variants in
+one place where they can be read and stepped through. Each config below
+corresponds to one strategy variant; main() runs all of them on the same data
+and reports comparable post-tax metrics.
 
-Key v2.0 changes vs v1.5:
-  - V2 overlay: after each NIFTY bear→bull regime flip where the preceding
-    bear-regime peak-to-trough drawdown was ≥15%, hold NIFTY 50 (not Mom30)
-    for the next 60 trading days on every LONG day. Mom30 underperforms
-    large-caps in V-recovery windows; NIFTY 50 captures the broad recovery.
-    +1.00pp CAGR contribution vs Config 6.
-  - 5-day slow-stress lock: after each unsuppressed slow-stress firing event,
-    suppress raw slow-stress fires for the next 5 trading days. Continuous
-    runs (consecutive firing days) are not suppressed. Prevents the
-    whipsaw re-fire pattern that caused the 2019 bleed. +0.14pp CAGR + 1.29pp
-    shallower MaxDD vs Config 6+V2.
+CONFIGS (all the same v1.5 base, varied by overlay):
+  C0  production v1.5 — sanity baseline. Should reproduce strategy.py
+        exactly (CAGR ~15.64%, Sharpe ~0.786, MaxDD ~-14.67%).
+  C1  + V2 overlay — hold NIFTY 50 for 60 trading days after each bear→bull
+        flip where the preceding bear-regime DD ≥ 15%. Otherwise = C0.
+  C2  + V2 + recovery latch, trend-only, X = 3%.
+  C3  + V2 + recovery latch, trend-only, X = 5%.
+  C4  + V2 + recovery latch, trend-only, X = 8%.
+  C5  + V2 + recovery latch, trend + macro, X = 3%
+        (macro: India VIX 90d z-score < 0 AND USDINR 20d return ≥ 0).
+  C6  + V2 + recovery latch, trend + macro, X = 5%.
+  C7  + V2 + recovery latch, trend + macro, X = 8%.
 
-Key v1.2 changes vs v1.1.1:
-  - Gold rotation now uses a per-latch momentum state machine (Config 4):
-    enter gold at latch start only if gold 10d momentum > 0; exit if
-    momentum turns negative; once exited mid-latch, stay in cash for the
-    rest of the latch. Addresses the 2026 OOS failure where gold was held
-    through an 11% decline because Config 2 had no exit-side risk control.
-  - Cash yield assumes a 100 bps haircut on RBI repo rate by default.
-    Models liquid-fund spread (~50 bps) + TER (~10-25 bps) + auto-sweep
-    frictions. Set cash_yield_haircut_bps=0 to recover v1.1.1 "full repo".
+RECOVERY LATCH MECHANICS (state machine over long-state days only):
+  NON_LONG       — strategy is flat/short/gold. No latch logic.
+  RECOVERY       — strategy just went long after stress (or V2 just ended).
+                   Allocation: inverse-vol Mom30 + gold (if G10 gate ON), else
+                   vol-targeted Mom30 + cash (gate OFF). No NIFTY.
+  ESTABLISHED    — latch fired (Mom30 ≥ X% above its own 100-DMA, plus macro
+                   confirm in TM variants). Allocation: 100% Mom30. One-way
+                   door — no flip back to RECOVERY without a fresh non-long.
 
-Architecture:
-  - Three-lane signal combiner (entry / exit / short) with regime-filter gate
-  - Dual-asset positions: nifty_position + gold_position emitted by combiner
-  - V2 overlay (optional): bear→bull flip detection with prior-DD threshold,
-    asset swap from Mom30 to NIFTY 50 for the next 60 trading days
-  - Per-asset transaction costs (NIFTY 3 bps, Mom30 6 bps, gold 5 bps,
-    cash sweep 0 bps)
-  - Time-varying RBI repo rate (minus 100bps haircut) credited on fully-flat
-    days (sourced from RBI MPC press releases, hardcoded as
-    RBI_REPO_RATE_HISTORY step function)
-  - Gold instrument: GOLDBEES.NS (NSE-listed gold ETF, INR-denominated).
-    Series begins 2009-01-02; pre-2009 stress-flat days remain in cash.
+V2 takes precedence: if a V2 window is active, that day uses 100% NIFTY 50
+regardless of recovery state. State is preserved across V2 so when V2 ends,
+allocation resumes appropriately.
 
-v1.0 (no gold, no cash yield) preserved in git history at commit c2860fc.
-v1.1.1 (Config 2, full repo) preserved at commit 078878a.
-v1.5 (Mom30 + gold-in-bull fix) preserved at commit 4e0fefe.
+DEBUGGING:
+  Each non-C0 config writes a per-day log to
+  results/strategy_lab_<config>_log.csv with columns
+  [date, base_pos_today, base_pos_yest, in_v2, lab_state, w_mom, w_nif,
+  w_gold, w_cash, ret_mom, ret_nif, ret_gold, ret_cash, day_pnl_pretax].
+  You can grep these files for any date to see exactly what the strategy did.
+
+The signal classes, RegimeFilter, SignalCombiner, helpers and
+build_rbi_repo_rate_series are UNCHANGED from strategy.py. Only
+MacroStrategyLab and main() differ.
 """
 
 import sys
@@ -105,41 +88,6 @@ class PanicShortSignal(MacroSignal):
         s = pd.Series(0.0, index=data.index, name=self.name)
         s[panic] = -1.0
         return s
-
-
-class PanicShortWithDDGate(PanicShortSignal):
-    """v2.1 panic-short with drawdown-depth confirmation gate.
-
-    Fires only when the base panic-short conditions hold AND NIFTY's
-    drawdown from its trailing `dd_lookback`-day high exceeds `dd_threshold`.
-
-    Rationale: VIX-spike-based panic-short signals can fire on isolated
-    intraday vol events that don't represent real downside. Requiring
-    confirmed price damage (DD ≥ 15% from rolling high) filters these out.
-    Historically suppresses 2013-08-27 taper false fire and 2022-02-24
-    Ukraine-reaction false fire. All 4 of the 2008 GFC panic-shorts (DD
-    16-32%) are preserved.
-
-    Backward compat: dd_threshold=0 reproduces vanilla PanicShortSignal."""
-    name = "panic_short_dd_gated"
-
-    def __init__(self, dd_threshold=0.15, dd_lookback=60, **kwargs):
-        super().__init__(**kwargs)
-        self.dd_threshold = dd_threshold
-        self.dd_lookback = dd_lookback
-
-    def compute(self, data):
-        raw = super().compute(data)
-        if self.dd_threshold <= 0:
-            return raw
-        nifty = data["^NSEI"].ffill()
-        trailing_max = nifty.rolling(self.dd_lookback, min_periods=1).max()
-        dd = 1.0 - nifty / trailing_max
-        gate_passes = dd > self.dd_threshold
-        firing = (raw < 0) & gate_passes
-        out = pd.Series(0.0, index=raw.index, name=self.name)
-        out[firing] = -1.0
-        return out
 
 class USDINRSignal(MacroSignal):
     name = "usdinr"
@@ -194,48 +142,6 @@ class SlowStressSignal(MacroSignal):
         s = pd.Series(0.0, index=data.index, name=self.name)
         s[fires.fillna(False)] = -1.0
         return s
-
-class SlowStressWithLockSignal(SlowStressSignal):
-    """v2.0 wrap around SlowStressSignal — adds an N-day post-firing lock.
-
-    After each unsuppressed firing event, suppress raw slow-stress fires for
-    the next `lock_days` trading days. Continuous runs (consecutive raw
-    firing days) are NOT suppressed — once a run starts, all its days are
-    allowed. Effect: after the strategy re-enters long following a stress
-    flat, it cannot be re-flatted by slow-stress for `lock_days` days.
-
-    Rationale: the 2019 bleed (and similar episodes in 2013, 2022) came from
-    slow-stress firing on a 1-day spike, forcing flat, then re-firing again
-    2-5 days later as conditions chopped around the threshold. The lock
-    prevents this whipsaw without interfering with persistent stress (COVID,
-    GFC, 2018 NBFC) where runs are continuous through their lifetime.
-
-    Backward compat: lock_days=0 reproduces vanilla SlowStressSignal behavior."""
-    name = "slow_stress_locked"
-
-    def __init__(self, lock_days=5, **kwargs):
-        super().__init__(**kwargs)
-        self.lock_days = lock_days
-
-    def compute(self, data):
-        raw = super().compute(data)
-        raw_fire = (raw < 0).values
-        n = len(raw)
-        out = np.zeros(n)
-        last_unsuppressed_fire = -10**9
-        in_active_run = False
-        for i in range(n):
-            if raw_fire[i]:
-                if in_active_run or (i - last_unsuppressed_fire > self.lock_days):
-                    out[i] = -1.0
-                    last_unsuppressed_fire = i
-                    in_active_run = True
-                # else: suppressed (within lock window from previous run)
-            else:
-                if in_active_run:
-                    in_active_run = False
-        return pd.Series(out, index=raw.index, name=self.name)
-
 
 class RegimeFilter:
     def __init__(self, window=200, target="^NSEI"):
@@ -598,9 +504,8 @@ def build_rbi_repo_rate_series(target_index: pd.DatetimeIndex) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 class MacroStrategy:
-    """v2.0: dual-asset PnL with per-asset transaction costs, RBI repo rate
-    cash yield on fully-flat days, optional V2 post-bear-recovery NIFTY 50
-    overlay."""
+    """v1.1: dual-asset PnL with per-asset transaction costs and RBI repo
+    rate cash yield on fully-flat days."""
 
     def __init__(self, combiner, target="^NSEI", gold_target="GOLDBEES.NS",
                  nifty_cost_bps=3, gold_cost_bps=5,
@@ -609,9 +514,7 @@ class MacroStrategy:
                  cash_yield_haircut_bps=100,
                  long_target="^NSEI",
                  long_cost_bps=3,
-                 apply_tax=True, tax_rate=0.15,
-                 enable_v2=False, v2_dd_threshold=0.15, v2_days=60,
-                 v2_regime_window=100):
+                 apply_tax=True, tax_rate=0.15):
         self.combiner = combiner
         self.target = target          # ^NSEI — used for signals, regime filter, SHORT positions
         self.gold_target = gold_target
@@ -632,46 +535,6 @@ class MacroStrategy:
         # to disable (recovers v1.3 behavior).
         self.apply_tax = apply_tax
         self.tax_rate = tax_rate
-        # v2.0: V2 overlay parameters. When enable_v2=True, after each NIFTY
-        # bear→bull regime flip (price crosses above v2_regime_window-DMA)
-        # where the preceding bear-regime peak-to-trough drawdown was ≥
-        # v2_dd_threshold, hold NIFTY 50 (not long_target) for the next
-        # v2_days trading days on every LONG day. Disabled by default for
-        # backward compat with Configs 1-6.
-        self.enable_v2 = enable_v2
-        self.v2_dd_threshold = v2_dd_threshold
-        self.v2_days = v2_days
-        self.v2_regime_window = v2_regime_window
-
-    def _compute_v2_active(self, data):
-        """V2 overlay: returns Series of bool — True on days within an active
-        V2 NIFTY 50 hold window. A window opens on each bear→bull regime flip
-        where the preceding bear-regime peak-to-trough drawdown was ≥
-        self.v2_dd_threshold, and persists for self.v2_days trading days."""
-        idx = data.index
-        nifty = data[self.target].ffill()
-        bull = (nifty > nifty.rolling(self.v2_regime_window, min_periods=1).mean())
-        prev_bull = bull.shift(1, fill_value=False)
-        flip = bull & (~prev_bull)
-        flips = idx[flip.values]
-        v2 = pd.Series(False, index=idx)
-        for d in flips:
-            p = idx.get_loc(d)
-            if p == 0:
-                continue
-            # Walk back to find the start of the preceding bear window
-            end = p - 1
-            s = end
-            while s > 0 and not bool(bull.iloc[s - 1]):
-                s -= 1
-            window = nifty.iloc[s:end + 1]
-            if len(window) == 0:
-                continue
-            bear_dd = abs(float((window / window.cummax() - 1.0).min()))
-            if bear_dd >= self.v2_dd_threshold:
-                end_idx = min(p + self.v2_days, len(v2))
-                v2.iloc[p:end_idx] = True
-        return v2
 
     def run(self, data):
         # Benchmark/short-side return: always ^NSEI
@@ -701,34 +564,19 @@ class MacroStrategy:
         # Mask out gold position when no data available (forced flat)
         gold_pos = gold_pos.where(gold_available, 0.0)
 
-        # v2.0: V2 overlay — on LONG days inside a V2 window, hold NIFTY 50
-        # instead of long_target. Otherwise behaves identically to v1.5.
-        if self.enable_v2:
-            v2_active = self._compute_v2_active(data)
-        else:
-            v2_active = pd.Series(False, index=data.index)
+        # v1.3: separate long and short accounting so they can use different
+        # underlying assets (long_target vs ^NSEI) and different cost rates.
+        long_pos  = (nifty_pos ==  1.0).astype(float)
+        short_pos = (nifty_pos == -1.0).astype(float)
 
-        long_mask = (nifty_pos == 1.0)
-        # Split long into Mom30-bucket (non-V2) and NIFTY-bucket (V2-active)
-        w_long_mom = (long_mask & ~v2_active).astype(float)
-        w_long_nif = (long_mask &  v2_active).astype(float)
-        w_short    = (nifty_pos == -1.0).astype(float)
+        long_cost  = long_pos.diff().abs()  * (self.long_cost_bps  / 10000)
+        short_cost = short_pos.diff().abs() * (self.nifty_cost_bps / 10000)
+        gold_cost  = gold_pos.diff().abs()  * (self.gold_cost_bps  / 10000)
 
-        # Per-asset costs (count transitions in each weight separately)
-        cost_long_mom = w_long_mom.diff().abs() * (self.long_cost_bps  / 10000)
-        cost_long_nif = w_long_nif.diff().abs() * (self.nifty_cost_bps / 10000)
-        cost_short    = w_short.diff().abs()    * (self.nifty_cost_bps / 10000)
-        cost_gold     = gold_pos.diff().abs()   * (self.gold_cost_bps  / 10000)
-
-        # Per-asset PnL (yesterday's weight × today's return)
-        pnl_long_mom = w_long_mom.shift(1) * long_returns
-        pnl_long_nif = w_long_nif.shift(1) * nifty_returns
-        pnl_short    = -w_short.shift(1)   * nifty_returns
-        pnl_gold     = gold_pos.shift(1)   * gold_returns
-
-        nifty_pnl = (pnl_long_mom + pnl_long_nif + pnl_short
-                     - cost_long_mom - cost_long_nif - cost_short)
-        gold_pnl  = pnl_gold - cost_gold
+        long_pnl  =  long_pos.shift(1)  * long_returns
+        short_pnl = -short_pos.shift(1) * nifty_returns   # short uses ^NSEI
+        nifty_pnl = long_pnl + short_pnl - long_cost - short_cost
+        gold_pnl  = gold_pos.shift(1) * gold_returns - gold_cost
 
         # Cash yield on fully-flat days (no NIFTY exposure, no gold exposure)
         # Yield rate = RBI repo rate minus haircut (time-varying daily step function).
@@ -757,7 +605,6 @@ class MacroStrategy:
             "gold_return":             gold_returns,
             "nifty_position":          nifty_pos,
             "gold_position":           gold_pos,
-            "v2_active":               v2_active,
             "strategy_return":         strategy_returns,
             "strategy_return_pretax":  strategy_returns_pretax,
         })
@@ -767,6 +614,323 @@ class MacroStrategy:
         combined[(nifty_pos == 0.0) & (gold_pos == 1.0)] = 2.0
         results["position"] = combined
         return results
+
+
+# ---------------------------------------------------------------------------
+# LAB MODIFICATION: MacroStrategyLab
+# ---------------------------------------------------------------------------
+# Adds two orthogonal overlays on top of base v1.5 (combiner):
+#   1. V2 overlay (enable_v2=True):
+#      Detect bear→bull flips where the preceding bear-regime peak-to-trough
+#      DD ≥ v2_dd_threshold. For v2_days trading days after each qualifying
+#      flip, swap the long-side asset from Mom30 to NIFTY 50.
+#   2. Recovery latch (recovery_latch dict not None):
+#      State machine over long-state days. RECOVERY = just re-entered long;
+#      ESTABLISHED = latch fired (Mom30 ≥ X% above own 100-DMA, plus optional
+#      macro confirm). In RECOVERY, hold inverse-vol Mom30/gold (if G10 gate
+#      ON) or vol-targeted Mom30 + cash (gate OFF). In ESTABLISHED, hold
+#      100% Mom30. One-way door — no flip back to RECOVERY without a fresh
+#      non-long episode. V2 takes precedence over recovery allocation.
+#
+# Computes daily PnL from per-day asset weights (w_mom, w_nif, w_gold, w_cash)
+# and per-asset transaction costs on weight changes.
+# ---------------------------------------------------------------------------
+
+class MacroStrategyLab(MacroStrategy):
+    """Extends MacroStrategy with V2 overlay and recovery-latch state machine.
+    Set enable_v2=False and recovery_latch=None to get exactly MacroStrategy
+    behavior (sanity-checked: C0 vs strategy.py default produces identical
+    headline numbers)."""
+
+    G10_INR_THR    = 0.005   # USDINR 10d return > 0.5% (rupee weakening)
+    G10_US10Y_THR  = 0.0     # US 10y 20d return < 0
+    G10_GOLD_CAP   = 0.10    # gold 10d return ≤ 10%
+
+    def __init__(self, *args,
+                 enable_v2=False, v2_dd_threshold=0.15, v2_days=60,
+                 recovery_latch=None,        # None or {"mode":"trend"|"trend_macro", "x":float}
+                 recovery_allocation="mom_gold_blend",  # see RECOVERY_ALLOCATIONS below
+                 vol_target_annual=None,     # None → no vol target (full Mom30 in cash-blend); else annualized
+                 vol_window=60,
+                 log_path=None,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.enable_v2 = enable_v2
+        self.v2_dd_threshold = v2_dd_threshold
+        self.v2_days = v2_days
+        self.recovery_latch = recovery_latch
+        # recovery_allocation options (what to hold during RECOVERY state):
+        #   "mom_gold_blend" — inv-vol Mom30+Gold if G10 gate on, else vol-target Mom30+cash (C2 original)
+        #   "nif_gold_blend" — inv-vol NIFTY+Gold unconditional, NIFTY-only if no gold data (C8)
+        #   "gold_only"      — 100% Gold (cash if no gold data) (C9)
+        #   "nif_only"       — 100% NIFTY 50 (C10)
+        self.recovery_allocation = recovery_allocation
+        self.vol_target_annual = vol_target_annual
+        self.vol_window = vol_window
+        self.log_path = log_path
+
+    # ----- V2 helpers ----------------------------------------------------
+    def _compute_v2_active(self, data, is_index):
+        rf_full = RegimeFilter(window=100)
+        bull_full = rf_full.bull_mask(data)
+        bull = bull_full.reindex(is_index).fillna(False)
+        prev = bull.shift(1, fill_value=False)
+        flip = bull & (~prev)
+        # Skip first day if it was already bull in the warmup
+        if flip.iloc[0]:
+            p = bull_full.index.get_loc(is_index[0])
+            if p > 0 and bool(bull_full.iloc[p - 1]):
+                flip.iloc[0] = False
+        flips = is_index[flip.values]
+        # Preceding-bear DD per flip
+        nifty = data[self.target]
+        def prev_bear_dd(d):
+            p = bull_full.index.get_loc(d)
+            if p == 0: return 0.0
+            end = p - 1; s = end
+            while s > 0 and not bool(bull_full.iloc[s - 1]):
+                s -= 1
+            w = nifty.iloc[s:end + 1]
+            if len(w) == 0: return 0.0
+            return abs(float((w / w.cummax() - 1.0).min()))
+        qualifying = [d for d in flips if prev_bear_dd(d) >= self.v2_dd_threshold]
+        v2 = pd.Series(False, index=is_index)
+        for d in qualifying:
+            i = is_index.get_loc(d)
+            v2.iloc[i:min(i + self.v2_days, len(is_index))] = True
+        return v2, qualifying
+
+    # ----- Recovery-latch helpers ----------------------------------------
+    def _g10_gate_series(self, data, is_index):
+        gold_10d  = data[self.gold_target].pct_change(10).reindex(is_index)
+        inr_10d   = data["INR=X"].pct_change(10).reindex(is_index)
+        us10y_20d = data["^TNX"].pct_change(20).reindex(is_index)
+        gold_avail = data[self.gold_target].reindex(is_index).notna()
+        gate = (
+            (gold_10d > 0) & (gold_10d <= self.G10_GOLD_CAP) &
+            (inr_10d > self.G10_INR_THR) &
+            (us10y_20d < self.G10_US10Y_THR) &
+            gold_avail
+        ).fillna(False)
+        return gate
+
+    def _latch_trigger_series(self, data, is_index):
+        mom_close = data[self.long_target].reindex(is_index).ffill()
+        mom_100dma = mom_close.rolling(100, min_periods=1).mean()
+        dist = mom_close / mom_100dma - 1.0
+        x = self.recovery_latch["x"]
+        trigger = dist >= x
+        if self.recovery_latch["mode"] == "trend_macro":
+            vix = data["^INDIAVIX"].reindex(is_index).ffill()
+            vix_90z = (vix - vix.rolling(90).mean()) / vix.rolling(90).std()
+            inr = data["INR=X"].reindex(is_index).ffill()
+            inr_20d = inr.pct_change(20)
+            macro = (vix_90z < 0) & (inr_20d >= 0)
+            trigger = trigger & macro
+        return trigger.fillna(False)
+
+    # ----- Main run ------------------------------------------------------
+    def run(self, data):
+        # ----- Identical to MacroStrategy: derive asset returns + positions -----
+        nifty_returns = data[self.target].pct_change().fillna(0.0)
+        if self.long_target in data.columns:
+            long_returns = data[self.long_target].pct_change().fillna(0.0)
+        else:
+            long_returns = nifty_returns
+        if self.gold_target in data.columns:
+            gold_returns = data[self.gold_target].pct_change().fillna(0.0).clip(-0.5, 0.5)
+            gold_available = data[self.gold_target].notna()
+        else:
+            gold_returns = pd.Series(0.0, index=data.index)
+            gold_available = pd.Series(False, index=data.index)
+        positions = self.combiner.compute_positions(data)
+        nifty_pos = positions["nifty_position"]
+        gold_pos  = positions["gold_position"].where(gold_available, 0.0)
+        is_index  = data.index
+
+        # ----- Cash yield series (per-day) -------------------------------
+        if self.use_cash_yield:
+            repo_rate = build_rbi_repo_rate_series(is_index)
+            haircut_repo = (repo_rate - self.cash_yield_haircut_bps / 10000).clip(lower=0)
+            daily_cash_yield = haircut_repo / 252
+        else:
+            daily_cash_yield = pd.Series(0.0, index=is_index)
+
+        # ----- V2 overlay -----------------------------------------------
+        if self.enable_v2:
+            v2_active, v2_flips = self._compute_v2_active(data, is_index)
+        else:
+            v2_active = pd.Series(False, index=is_index)
+            v2_flips = []
+
+        # ----- Recovery latch precomputation ----------------------------
+        latch_enabled = self.recovery_latch is not None
+        if latch_enabled:
+            gate = self._g10_gate_series(data, is_index)
+            latch_trigger = self._latch_trigger_series(data, is_index)
+            sigma_m = (long_returns.rolling(self.vol_window).std() * np.sqrt(252)).shift(1)
+            sigma_n = (nifty_returns.rolling(self.vol_window).std() * np.sqrt(252)).shift(1)
+            sigma_g = (gold_returns.rolling(self.vol_window).std() * np.sqrt(252)).shift(1)
+        else:
+            gate = pd.Series(False, index=is_index)
+            latch_trigger = pd.Series(False, index=is_index)
+            sigma_m = pd.Series(np.nan, index=is_index)
+            sigma_n = pd.Series(np.nan, index=is_index)
+            sigma_g = pd.Series(np.nan, index=is_index)
+
+        # ----- State machine + weight construction -----------------------
+        n = len(is_index)
+        long_mask = (nifty_pos == 1.0)
+        w_mom  = np.zeros(n); w_nif = np.zeros(n)
+        w_gold = np.zeros(n); w_cash = np.zeros(n)
+        lab_state = np.empty(n, dtype=object)
+        state = "NON_LONG"
+        for i in range(n):
+            today_long = bool(long_mask.iloc[i])
+            today_v2   = bool(v2_active.iloc[i]) and today_long
+            # State transitions ------------------------------------------
+            if not today_long:
+                state = "NON_LONG"
+            elif today_v2:
+                # V2 takes over allocation but state is preserved.
+                if state == "NON_LONG":
+                    state = "RECOVERY"
+                # Latch is NOT checked while V2 active.
+            else:
+                if state == "NON_LONG":
+                    state = "RECOVERY"
+                if state == "RECOVERY" and latch_enabled and bool(latch_trigger.iloc[i]):
+                    state = "ESTABLISHED"
+                elif state == "RECOVERY" and not latch_enabled:
+                    # No latch defined → stay 100% Mom30 like base
+                    state = "ESTABLISHED"
+            lab_state[i] = state if today_long else "NON_LONG"
+
+            # Weights ----------------------------------------------------
+            if not today_long:
+                # Non-long: mirror base positions (short / gold / flat)
+                if nifty_pos.iloc[i] == -1.0:
+                    w_nif[i] = -1.0
+                elif gold_pos.iloc[i] == 1.0:
+                    w_gold[i] = 1.0
+                else:
+                    w_cash[i] = 1.0
+            elif today_v2:
+                w_nif[i] = 1.0
+            elif state == "RECOVERY":
+                alloc = self.recovery_allocation
+                gold_avail_today = bool(gold_available.iloc[i]) if hasattr(gold_available, "iloc") else True
+                sm = sigma_m.iloc[i]; sn = sigma_n.iloc[i]; sg = sigma_g.iloc[i]
+                gate_on = bool(gate.iloc[i])
+
+                if alloc == "mom_gold_blend":
+                    # Original C2: inv-vol Mom30+Gold if G10 ON, else vol-target Mom30+cash
+                    if gate_on and not (np.isnan(sm) or np.isnan(sg) or sm <= 0 or sg <= 0):
+                        inv_m, inv_g = 1.0/sm, 1.0/sg
+                        s = inv_m + inv_g
+                        w_mom[i]  = inv_m / s
+                        w_gold[i] = inv_g / s
+                    elif (self.vol_target_annual is not None) and (not np.isnan(sm)) and sm > 0:
+                        scale = min(self.vol_target_annual / sm, 1.0)
+                        w_mom[i]  = scale
+                        w_cash[i] = 1.0 - scale
+                    else:
+                        w_mom[i] = 1.0
+                elif alloc == "nif_gold_blend":
+                    # C8: inv-vol NIFTY+Gold, unconditional (no G10 gate).
+                    # Falls back to 100% NIFTY if no gold data (pre-2009).
+                    if gold_avail_today and not (np.isnan(sn) or np.isnan(sg) or sn <= 0 or sg <= 0):
+                        inv_n, inv_g = 1.0/sn, 1.0/sg
+                        s = inv_n + inv_g
+                        w_nif[i]  = inv_n / s
+                        w_gold[i] = inv_g / s
+                    else:
+                        w_nif[i] = 1.0
+                elif alloc == "gold_only":
+                    # C9: 100% gold unconditional (cash if no gold data)
+                    if gold_avail_today:
+                        w_gold[i] = 1.0
+                    else:
+                        w_cash[i] = 1.0
+                elif alloc == "gold_gated_cash":
+                    # C11: G10 gate ON → 100% gold; gate OFF → cash
+                    if gate_on and gold_avail_today:
+                        w_gold[i] = 1.0
+                    else:
+                        w_cash[i] = 1.0
+                elif alloc == "gold_gated_mom":
+                    # C12: G10 gate ON → 100% gold; gate OFF → 100% Mom30
+                    if gate_on and gold_avail_today:
+                        w_gold[i] = 1.0
+                    else:
+                        w_mom[i] = 1.0
+                elif alloc == "nif_only":
+                    # C10: 100% NIFTY 50
+                    w_nif[i] = 1.0
+                else:
+                    w_mom[i] = 1.0
+            else:  # ESTABLISHED
+                w_mom[i] = 1.0
+
+        # ----- Costs (on weight changes, per asset) ---------------------
+        wdf = pd.DataFrame({"mom": w_mom, "nif": w_nif, "gold": w_gold, "cash": w_cash}, index=is_index)
+        cost_mom  = wdf["mom"].diff().abs().fillna(0)  * (self.long_cost_bps  / 10000)
+        cost_nif  = wdf["nif"].diff().abs().fillna(0)  * (self.nifty_cost_bps / 10000)
+        cost_gold = wdf["gold"].diff().abs().fillna(0) * (self.gold_cost_bps  / 10000)
+        cost_cash = wdf["cash"].diff().abs().fillna(0) * (self.cash_cost_bps  / 10000)
+        total_cost = cost_mom + cost_nif + cost_gold + cost_cash
+
+        # ----- PnL from yesterday's weights × today's returns -----------
+        pnl_mom  = wdf["mom"].shift(1).fillna(0)  * long_returns
+        pnl_nif  = wdf["nif"].shift(1).fillna(0)  * nifty_returns
+        pnl_gold = wdf["gold"].shift(1).fillna(0) * gold_returns
+        pnl_cash = wdf["cash"].shift(1).fillna(0) * daily_cash_yield
+        pretax = (pnl_mom + pnl_nif + pnl_gold + pnl_cash - total_cost).rename("strategy_return_pretax")
+
+        if self.apply_tax:
+            posttax = apply_annual_tax(pretax.fillna(0.0), tax_rate=self.tax_rate).rename("strategy_return")
+        else:
+            posttax = pretax.rename("strategy_return")
+
+        # ----- Per-day log (for debugging) ------------------------------
+        if self.log_path is not None:
+            os = __import__("os")
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+            log = pd.DataFrame({
+                "base_pos":   nifty_pos,
+                "gold_pos":   gold_pos,
+                "in_v2":      v2_active,
+                "lab_state":  pd.Series(lab_state, index=is_index),
+                "latch_trig": latch_trigger if latch_enabled else False,
+                "gate":       gate if latch_enabled else False,
+                "sigma_m":    sigma_m,
+                "w_mom":      wdf["mom"],
+                "w_nif":      wdf["nif"],
+                "w_gold":     wdf["gold"],
+                "w_cash":     wdf["cash"],
+                "ret_mom":    long_returns,
+                "ret_nif":    nifty_returns,
+                "ret_gold":   gold_returns,
+                "ret_cash":   daily_cash_yield,
+                "cost":       total_cost,
+                "pretax":     pretax,
+                "posttax":    posttax,
+            })
+            log.to_csv(self.log_path)
+
+        results = pd.DataFrame({
+            "nifty_return":            nifty_returns,
+            "gold_return":             gold_returns,
+            "nifty_position":          nifty_pos,
+            "gold_position":           gold_pos,
+            "strategy_return":         posttax,
+            "strategy_return_pretax":  pretax,
+        })
+        combined = nifty_pos.copy()
+        combined[(nifty_pos == 0.0) & (gold_pos == 1.0)] = 2.0
+        results["position"] = combined
+        return results, {"v2_flips": v2_flips, "lab_state": pd.Series(lab_state, index=is_index),
+                          "weights": wdf, "v2_active": v2_active}
 
 
 # ---------------------------------------------------------------------------
@@ -836,23 +1000,13 @@ def position_breakdown(res):
 
 
 def make_combiner(rotate_stress=False, rotate_panic=False, use_momentum_gold=False,
-                  use_supply_shock=False, gold_gate_external=True,
-                  slow_stress_lock_days=0,
-                  panic_short_dd_threshold=0.0):
+                  use_supply_shock=False, gold_gate_external=True):
     """v1.4 default combiner: SlowStressSignal replaces SupplyShockSignal
     as the stress-flat trigger, G10 gold gate (external macro confirmation +
     upper momentum cap) replaces legacy `gold_10d > 0` gate.
 
     For v1.3 backward compatibility:
         make_combiner(use_supply_shock=True, gold_gate_external=False)
-
-    v2.0 addition: set slow_stress_lock_days > 0 to wrap SlowStressSignal
-    with the post-firing lock (used by Config 7). Default 0 = no lock
-    (vanilla v1.4 behavior, preserved for Configs 1-6).
-
-    v2.1 addition: set panic_short_dd_threshold > 0 to gate panic-short on
-    NIFTY drawdown from trailing 60-day high. Used by Config 7. Default 0 =
-    no gate (vanilla panic-short, preserved for Configs 1-6).
     """
     rf = RegimeFilter(window=100)
     c = SignalCombiner(regime_filter=rf,
@@ -874,190 +1028,258 @@ def make_combiner(rotate_stress=False, rotate_panic=False, use_momentum_gold=Fal
         # add_exit_no_cooldown because its windows (20d INR, 90d VIX-z) are
         # already slow — additional cooldown extension would over-extend
         # flat days and crush CAGR.
-        # v2.0: optionally wrap with N-day post-firing lock (Config 7).
-        if slow_stress_lock_days > 0:
-            ss_signal = SlowStressWithLockSignal(
-                lock_days=slow_stress_lock_days,
-                inr_window=20, inr_threshold=0.01,
-                vix_z_window=90, vix_z_threshold=1.5, vix_mom_window=5)
-        else:
-            ss_signal = SlowStressSignal(
-                inr_window=20, inr_threshold=0.01,
-                vix_z_window=90, vix_z_threshold=1.5, vix_mom_window=5)
-        c.add_exit_no_cooldown(ss_signal)
-    # v2.1: optionally wrap panic-short with NIFTY-DD confirmation gate
-    if panic_short_dd_threshold > 0:
-        panic_signal = PanicShortWithDDGate(
-            dd_threshold=panic_short_dd_threshold, dd_lookback=60,
-            vix_level=25, vix_spike=0.50, window=10, dma=100)
-    else:
-        panic_signal = PanicShortSignal(vix_level=25, vix_spike=0.50,
-                                         window=10, dma=100)
-    c.add_short(panic_signal, hold=False, max_hold_days=60,
-                exit_ma_fast=5, exit_ma_slow=20)
+        c.add_exit_no_cooldown(SlowStressSignal(inr_window=20, inr_threshold=0.01,
+                                                vix_z_window=90, vix_z_threshold=1.5,
+                                                vix_mom_window=5))
+    c.add_short(PanicShortSignal(vix_level=25, vix_spike=0.50, window=10, dma=100),
+                hold=False, max_hold_days=60, exit_ma_fast=5, exit_ma_slow=20)
     return c
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Main — LAB CONFIG RUNNER
 # ---------------------------------------------------------------------------
 
-def main():
-    WARMUP = "2006-01-01"
-    START  = "2008-04-01"
-    END    = "2025-12-31"
-    # v1.4: ^TNX (US 10Y yield) added — required by G10 gold gate
-    TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
+import os as _os
 
-    print("Downloading data ...", file=sys.stderr)
-    raw = yf.download(TICKERS, start=WARMUP, end="2026-05-12",
-                      auto_adjust=True, progress=False)["Close"]
-    raw.dropna(how="all", inplace=True)
-    # NOTE: do NOT ffill GOLDBEES.NS pre-2010 (no data → gold position must stay flat)
-    # ffill the others (NSE/oil/INR/VIX/US10Y) for cross-market holiday alignment
+def _load_data():
+    """Load raw market data, using local _yf_cache.pkl if present (faster + offline)."""
+    WARMUP = "2006-01-01"
+    TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
+    cache = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                          "_yf_cache.pkl")
+    if _os.path.exists(cache):
+        print(f"Loading cached market data from {cache} ...", file=sys.stderr)
+        raw = pd.read_pickle(cache)
+    else:
+        print("Downloading market data ...", file=sys.stderr)
+        raw = yf.download(TICKERS, start=WARMUP, end="2026-05-12",
+                          auto_adjust=True, progress=False)["Close"]
+        raw.dropna(how="all", inplace=True)
+        raw.to_pickle(cache)
     for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "^TNX"]:
         if col in raw.columns:
             raw[col] = raw[col].ffill()
-    # GOLDBEES.NS: ffill ONLY after its first valid date (so intra-series holiday gaps
-    # are filled, but pre-2010 stays NaN)
     if "GOLDBEES.NS" in raw.columns:
-        first_valid = raw["GOLDBEES.NS"].first_valid_index()
-        if first_valid is not None:
-            mask = raw.index >= first_valid
-            raw.loc[mask, "GOLDBEES.NS"] = raw.loc[mask, "GOLDBEES.NS"].ffill()
-        gold_first = raw["GOLDBEES.NS"].first_valid_index()
-        print(f"\nGOLDBEES.NS data starts: {gold_first.date() if gold_first else 'NONE'}",
-              file=sys.stderr)
+        fv = raw["GOLDBEES.NS"].first_valid_index()
+        if fv is not None:
+            raw.loc[raw.index >= fv, "GOLDBEES.NS"] = \
+                raw.loc[raw.index >= fv, "GOLDBEES.NS"].ffill()
+    # Load NSE CSV for Mom30
+    parent = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    raw["NIFTYMOM30"] = load_nse_index_csv(
+        _os.path.join(parent, "data", "momentum30_history.csv"),
+        "NIFTYMOM30").reindex(raw.index).ffill()
+    return raw
 
-    # v1.3: load NSE CSV data for higher-alpha index substitution
-    try:
-        midcap150 = load_nse_index_csv("data/midcap150_history.csv", "NIFTYMIDCAP150")
-        mom30     = load_nse_index_csv("data/momentum30_history.csv", "NIFTYMOM30")
-        raw["NIFTYMIDCAP150"] = midcap150.reindex(raw.index).ffill()
-        raw["NIFTYMOM30"]     = mom30.reindex(raw.index).ffill()
-        print(f"NIFTYMIDCAP150 first valid: {raw['NIFTYMIDCAP150'].first_valid_index().date()}",
-              file=sys.stderr)
-        print(f"NIFTYMOM30 first valid:     {raw['NIFTYMOM30'].first_valid_index().date()}",
-              file=sys.stderr)
-    except FileNotFoundError as e:
-        print(f"WARNING: NSE CSV missing — Configs 5/6 will be skipped. ({e})", file=sys.stderr)
 
-    # v1.3: configs list with optional MacroStrategy kwargs as 3rd tuple element.
-    # Configs 1-4 use defaults (long_target="^NSEI", long_cost_bps=3) — backward compatible.
-    # Configs 5-6 substitute the long-side asset to capture higher-alpha bull-regime exposure.
-    configs = [
-        ("Config 1 (no gold)",                make_combiner(False, False),                          {}),
-        ("Config 2 (gold flat)",              make_combiner(True,  False),                          {}),
-        ("Config 3 (gold all)",               make_combiner(True,  True),                           {}),
-        ("Config 4 (gold momentum)",          make_combiner(True,  False, use_momentum_gold=True),  {}),
-        ("Config 5 (v1.3 Midcap 150)",        make_combiner(True,  False, use_momentum_gold=True),
-            {"long_target": "NIFTYMIDCAP150", "long_cost_bps": 6}),
-        ("Config 6 (v1.5 Momentum 30)",       make_combiner(True,  False, use_momentum_gold=True),
-            {"long_target": "NIFTYMOM30",     "long_cost_bps": 6}),
-        # v2.1 production: Config 6 + V2 overlay + 5-day slow-stress lock +
-        #                  15% DD gate on panic-short
-        ("Config 7 (v2.1 PROD: Mom30+V2+L5+DD15)",
-            make_combiner(True, False, use_momentum_gold=True,
-                          slow_stress_lock_days=5,
-                          panic_short_dd_threshold=0.15),
-            {"long_target": "NIFTYMOM30",     "long_cost_bps": 6,
-             "enable_v2": True, "v2_dd_threshold": 0.15, "v2_days": 60}),
-    ]
+# ---------------------------------------------------------------------------
+# Config catalog. Each config is a dict consumed by main(). The base
+# combiner is the same v1.5 production for all configs; only the
+# MacroStrategyLab kwargs change between configs.
+# ---------------------------------------------------------------------------
+CONFIG_CATALOG = {
+    "C0": {
+        "label": "C0 production v1.5 (baseline)",
+        "enable_v2": False, "recovery_latch": None,
+    },
+    "C1": {
+        "label": "C1 + V2 overlay",
+        "enable_v2": True,  "recovery_latch": None,
+    },
+    "C2": {
+        "label": "C2 + V2 + latch trend ≥3%",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend",       "x": 0.03},
+    },
+    "C3": {
+        "label": "C3 + V2 + latch trend ≥5%",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend",       "x": 0.05},
+    },
+    "C4": {
+        "label": "C4 + V2 + latch trend ≥8%",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend",       "x": 0.08},
+    },
+    "C5": {
+        "label": "C5 + V2 + latch trend+macro ≥3%",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend_macro", "x": 0.03},
+    },
+    "C6": {
+        "label": "C6 + V2 + latch trend+macro ≥5%",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend_macro", "x": 0.05},
+    },
+    "C7": {
+        "label": "C7 + V2 + latch trend+macro ≥8%",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend_macro", "x": 0.08},
+    },
+    # NEW VARIANTS — all use latch T3 (Mom30 ≥3% above own 100-DMA) but
+    # change WHAT IS HELD during the RECOVERY state.
+    "C8": {
+        "label": "C8 + V2 + T3, NIFTY+Gold inv-vol blend",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend", "x": 0.03},
+        "recovery_allocation": "nif_gold_blend",
+    },
+    "C9": {
+        "label": "C9 + V2 + T3, 100% Gold during recovery",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend", "x": 0.03},
+        "recovery_allocation": "gold_only",
+    },
+    "C10": {
+        "label": "C10 + V2 + T3, 100% NIFTY 50 during recovery",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend", "x": 0.03},
+        "recovery_allocation": "nif_only",
+    },
+    "C11": {
+        "label": "C11 + V2 + T3, gold (G10-gated) → cash",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend", "x": 0.03},
+        "recovery_allocation": "gold_gated_cash",
+    },
+    "C12": {
+        "label": "C12 + V2 + T3, gold (G10-gated) → Mom30",
+        "enable_v2": True,  "recovery_latch": {"mode": "trend", "x": 0.03},
+        "recovery_allocation": "gold_gated_mom",
+    },
+}
 
-    runs = []
-    for label, combiner, kwargs in configs:
-        s = MacroStrategy(combiner, nifty_cost_bps=3, gold_cost_bps=5, **kwargs)
-        r = s.run(raw).loc[START:END].copy()
-        runs.append((label, r))
 
-    # ── Verification checks ───────────────────────────────────────────────
-    print("\nVERIFICATION CHECKS")
-    print("=" * 60)
-    for label, r in runs:
-        bd = position_breakdown(r)
-        check = "OK" if bd["total"] == len(r) else f"FAIL (sum {bd['total']} != {len(r)})"
-        print(f"  {label}: {bd}  [days sum: {check}]")
+def run_config(name, cfg, raw, start, end, vol_target_annual):
+    """Run a single config and return (post-tax daily series, diagnostics dict)."""
+    rf = RegimeFilter(window=100)
+    combiner = SignalCombiner(regime_filter=rf,
+                              rotate_to_gold_on_stress_flat=True,
+                              rotate_to_gold_on_panic_short=False,
+                              rotate_with_momentum=True,
+                              gold_gate_external=True)
+    combiner.add_entry(USDINRSignal(window=10, threshold=0.01), weight=1.5)
+    combiner.add_entry(IndiaVIXSignal(window=10, threshold=0.20), weight=1.5)
+    combiner.add_exit_no_cooldown(SlowStressSignal(
+        inr_window=20, inr_threshold=0.01,
+        vix_z_window=90, vix_z_threshold=1.5, vix_mom_window=5))
+    combiner.add_short(PanicShortSignal(vix_level=25, vix_spike=0.50, window=10, dma=100),
+                       hold=False, max_hold_days=60, exit_ma_fast=5, exit_ma_slow=20)
 
-    # Specific assertions — Configs 4/5/6 share the same signals so long-day
-    # counts should be identical (only the underlying asset held differs).
-    bd4 = position_breakdown(runs[3][1])
-    bd5 = position_breakdown(runs[4][1]) if len(runs) > 4 else None
-    bd6 = position_breakdown(runs[5][1]) if len(runs) > 5 else None
-    print()
-    print(f"  Cfg4 long days (^NSEI):      {bd4['long_nifty']}")
-    print(f"  Cfg5 long days (Midcap 150): {bd5['long_nifty'] if bd5 else 'N/A'}")
-    print(f"  Cfg6 long days (Momentum 30): {bd6['long_nifty'] if bd6 else 'N/A'}")
-    match = bd5 and bd6 and bd4['long_nifty'] == bd5['long_nifty'] == bd6['long_nifty']
-    print(f"  Long-day counts match across Cfg 4/5/6: {match}")
+    log_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                            "results")
+    log_path = _os.path.join(log_dir, f"strategy_lab_{name}_log.csv") if name != "C0" else None
+    s = MacroStrategyLab(
+        combiner,
+        target="^NSEI", gold_target="GOLDBEES.NS",
+        long_target="NIFTYMOM30", long_cost_bps=6,
+        nifty_cost_bps=3, gold_cost_bps=5,
+        cash_yield_haircut_bps=100,
+        apply_tax=True, tax_rate=0.15,
+        enable_v2=cfg["enable_v2"], v2_dd_threshold=0.15, v2_days=60,
+        recovery_latch=cfg["recovery_latch"],
+        recovery_allocation=cfg.get("recovery_allocation", "mom_gold_blend"),
+        vol_target_annual=vol_target_annual,
+        vol_window=60,
+        log_path=log_path,
+    )
+    result = s.run(raw)
+    if isinstance(result, tuple):
+        df, diag = result
+    else:
+        df = result; diag = {}
+    df = df.loc[start:end]
+    return df, diag
 
-    # ── Comparison Table ──────────────────────────────────────────────────
-    print(f"\n\nCONFIGURATION COMPARISON — 2008-2025, base costs (NIFTY 3 bps, gold 5 bps, "
-          f"Midcap/Mom30 6 bps)")
+
+def main():
+    START, END = "2008-04-01", "2025-12-31"
+    raw = _load_data()
+
+    # ── Run C0 first to establish target vol (used by latch configs) ──
+    print("\nRunning C0 (production v1.5 baseline) ...", file=sys.stderr)
+    c0_cfg = CONFIG_CATALOG["C0"]
+    df0, _ = run_config("C0", c0_cfg, raw, START, END, vol_target_annual=None)
+    # Pre-tax vol of base — used as vol target for the recovery blends
+    target_vol = float(df0["strategy_return_pretax"].std() * np.sqrt(252))
+    print(f"Target vol (C0 full-sample pre-tax realized): {target_vol*100:.2f}%", file=sys.stderr)
+
+    # ── Run all configs ──
+    runs = [("C0", c0_cfg["label"], df0, {})]
+    for name in ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12"]:
+        cfg = CONFIG_CATALOG[name]
+        print(f"Running {name} ({cfg['label']}) ...", file=sys.stderr)
+        df, diag = run_config(name, cfg, raw, START, END, vol_target_annual=target_vol)
+        runs.append((name, cfg["label"], df, diag))
+
+    # ── Sanity check: C0 should reproduce strategy.py headline numbers ──
+    print("\n" + "=" * 110)
+    print("  SANITY: C0 reproduction check (should match strategy.py default)")
+    print("=" * 110)
+    m0 = metrics(df0["strategy_return"])
+    print(f"  C0 post-tax CAGR:   {m0['cagr']*100:+.4f}%   (expected ~15.64%)")
+    print(f"  C0 post-tax Sharpe: {m0['sharpe']:.4f}        (expected ~0.786)")
+    print(f"  C0 post-tax MaxDD:  {m0['max_dd']*100:+.4f}% (expected ~-14.67%)")
+
+    # ── Headline comparison ──
+    print("\n" + "=" * 130)
+    print("  HEADLINE METRICS (post-tax)")
     print("=" * 130)
-    m = [metrics(r["strategy_return"]) for _, r in runs]
-    bds = [position_breakdown(r) for _, r in runs]
+    print(f"  {'Cfg':<4} {'Label':<38} {'CAGR':>9} {'Sharpe':>8} {'Calmar':>8} "
+          f"{'MaxDD':>9} {'ΔCAGR':>9} {'ΔSharpe':>9}")
+    print("  " + "-" * 4 + " " + "-" * 38 + " " + "-" * 9 + " " + "-" * 8 + " "
+          + "-" * 8 + " " + "-" * 9 + " " + "-" * 9 + " " + "-" * 9)
+    base_m = None
+    for name, label, df, diag in runs:
+        m = metrics(df["strategy_return"])
+        if name == "C1": base_m = m  # base for Δ comparisons
+        if base_m is None or name in ("C0", "C1"):
+            print(f"  {name:<4} {label:<38} {m['cagr']*100:+7.2f}% {m['sharpe']:>8.3f} "
+                  f"{m['calmar']:>8.2f} {m['max_dd']*100:+8.2f}% "
+                  f"{'—':>9} {'—':>9}")
+        else:
+            dc = m["cagr"] - base_m["cagr"]
+            ds = m["sharpe"] - base_m["sharpe"]
+            print(f"  {name:<4} {label:<38} {m['cagr']*100:+7.2f}% {m['sharpe']:>8.3f} "
+                  f"{m['calmar']:>8.2f} {m['max_dd']*100:+8.2f}% "
+                  f"{dc*100:+8.2f}pp {ds:+9.3f}")
+    print()
 
-    nifty_only = runs[0][1]["nifty_return"]
-    m_nifty = metrics(nifty_only)
-
-    n = len(runs)
-    rows = [
-        ("Cumulative return",   [f"{x['total']*100:>7.1f}%" for x in m]),
-        ("CAGR",                [f"{x['cagr']*100:>7.2f}%"  for x in m]),
-        ("Sharpe",              [f"{x['sharpe']:>8.2f}"     for x in m]),
-        ("Sortino",             [f"{x['sortino']:>8.2f}"    for x in m]),
-        ("Calmar",              [f"{x['calmar']:>8.2f}"     for x in m]),
-        ("Max drawdown",        [f"{x['max_dd']*100:>7.1f}%" for x in m]),
-        ("Annualized vol",      [f"{x['vol']*100:>7.2f}%"   for x in m]),
-        ("Days long",           [f"{b['long_nifty']:>8d}"   for b in bds]),
-        ("Days short",          [f"{b['short_nifty']:>8d}"  for b in bds]),
-        ("Days long gold",      [f"{b['long_gold']:>8d}"    for b in bds]),
-        ("Days flat",           [f"{b['flat']:>8d}"         for b in bds]),
-    ]
-    headers = ["Cfg1", "Cfg2", "Cfg3", "Cfg4", "Cfg5", "Cfg6", "Cfg7"][:n]
-    subs    = ["(no gold)", "(gold flat)", "(gold all)", "(momentum)",
-               "(Midcap150)", "(Mom30)", "(v2.0)"][:n]
-    hdr = f"  {'Metric':<20}" + "".join(f" | {h:>10}" for h in headers)
-    sub = f"  {'':<20}"        + "".join(f" | {s:>10}" for s in subs)
+    # ── Year-by-year ──
+    print("=" * 130)
+    print("  YEAR-BY-YEAR (post-tax)")
+    print("=" * 130)
+    years = sorted(set(df0.index.year))
+    hdr = f"  {'Year':<6}"
+    for name, label, df, diag in runs:
+        hdr += f" {name:>9}"
     print(hdr)
-    print(sub)
-    print("  " + "-" * 20 + ("+" + "-" * 12) * n)
-    for label, vals in rows:
-        print(f"  {label:<20}" + "".join(f" | {v:>10}" for v in vals))
-    print(f"\n  (Reference) NIFTY B&H Sharpe={m_nifty['sharpe']:.2f}, "
-          f"CAGR={m_nifty['cagr']*100:.2f}%, MaxDD={m_nifty['max_dd']*100:.1f}%")
+    print("  " + "-" * 6 + (" " + "-" * 9) * len(runs))
+    for y in years:
+        row = f"  {y:<6}"
+        for name, label, df, diag in runs:
+            s = df["strategy_return"][df.index.year == y]
+            yr = float((1 + s).prod() - 1) if len(s) else 0.0
+            row += f" {yr*100:>+8.2f}%"
+        print(row)
+    print()
 
-    # ── Year-by-year ──────────────────────────────────────────────────────
-    print("\n\nYEAR-BY-YEAR RETURNS (%)")
-    yhdr = "  Year |   NIFTY" + "".join(f" | {h:>7}" for h in headers)
-    print(yhdr)
-    print("  -----+---------" + ("+---------" * n))
-    annual_n = (1 + nifty_only).resample("YE").prod() - 1
-    annuals = [(1 + r["strategy_return"]).resample("YE").prod() - 1 for _, r in runs]
-    for ts in annual_n.index:
-        yr = ts.year
-        nv = annual_n.loc[ts] * 100
-        vals = [a.loc[ts] * 100 for a in annuals]
-        print(f"  {yr} | {nv:>+6.1f}%" + "".join(f" | {v:>+6.1f}%" for v in vals))
+    # ── State breakdown for latch configs ──
+    print("=" * 130)
+    print("  RECOVERY STATE BREAKDOWN — days in each state per config")
+    print("=" * 130)
+    print(f"  {'Cfg':<4} {'NON_LONG':>10} {'RECOVERY':>10} {'ESTABLISHED':>13} "
+          f"{'V2 active':>10}")
+    print("  " + "-" * 4 + " " + "-" * 10 + " " + "-" * 10 + " " + "-" * 13 + " " + "-" * 10)
+    for name, label, df, diag in runs:
+        if not diag or "lab_state" not in diag:
+            print(f"  {name:<4}    (no state machine — C0 baseline)")
+            continue
+        state = diag["lab_state"].reindex(df.index)
+        v2 = diag["v2_active"].reindex(df.index)
+        n_nl  = int((state == "NON_LONG").sum())
+        n_rec = int((state == "RECOVERY").sum())
+        n_est = int((state == "ESTABLISHED").sum())
+        n_v2  = int(v2.sum())
+        print(f"  {name:<4} {n_nl:>10d} {n_rec:>10d} {n_est:>13d} {n_v2:>10d}")
+    print()
 
-    # ── Crisis windows ────────────────────────────────────────────────────
-    print("\n\nCRISIS WINDOWS")
-    print("  Crisis        | Window           |   NIFTY" + "".join(f" | {h:>7}" for h in headers))
-    print("  --------------+------------------+---------" + ("+---------" * n))
-    crises = [
-        ("GFC",            "2008-09-01", "2009-03-31"),
-        ("Euro debt 2011", "2011-07-01", "2011-12-31"),
-        ("Taper 2013",     "2013-05-01", "2013-09-30"),
-        ("NBFC 2018",      "2018-09-01", "2019-02-28"),
-        ("COVID 2020",     "2020-02-01", "2020-12-31"),
-    ]
-    for name, s, e in crises:
-        nv = (1 + nifty_only.loc[s:e]).prod() - 1
-        rs = [(1 + r["strategy_return"].loc[s:e]).prod() - 1 for _, r in runs]
-        line = f"  {name:<13} | {s} to {e[:7]} | {nv*100:>+6.1f}%"
-        line += "".join(f" | {v*100:>+6.1f}%" for v in rs)
-        print(line)
-
+    # ── Where to find per-day logs ──
+    log_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                            "results")
+    print(f"  Per-day logs written to: {log_dir}/strategy_lab_<C1-C7>_log.csv")
+    print(f"  (grep any date to see the state + weights + pnl that day)")
     print()
 
 

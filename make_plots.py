@@ -1,10 +1,10 @@
 """
 make_plots.py — generate publication-quality plots for the README.
 
-Runs the production v1.3 Config 6 strategy (momentum-gated gold rotation
-during stress flat, panic-short retained, RBI repo rate minus 100bps haircut
-credited on fully-flat days). Imports from strategy.py rather than duplicating
-logic.
+Runs the production v2.1 Config 7 strategy: NIFTY 200 Momentum 30 long-side +
+post-bear NIFTY recovery overlay + slow-stress cooldown + panic-short drawdown
+confirmation + momentum-gated gold rotation with macro confirmation. Imports
+from strategy.py rather than duplicating logic.
 
 Produces:
   images/equity_curve.png
@@ -36,27 +36,29 @@ from strategy import (
 
 
 # ---------------------------------------------------------------------------
-# run_backtest() — runs Config 6 production (v1.3 — Mom30 as long-side asset)
+# run_backtest() — runs Config 7 production (v2.1)
 # ---------------------------------------------------------------------------
 
 def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
                  use_cash_yield: bool = True,
                  cash_yield_haircut_bps: float = 100) -> dict:
     """
-    Downloads data, runs Config 6 (v1.3: momentum-gated gold rotation on stress
-    flat, panic-short retained, repo-haircut on flat days, NIFTY 200 Momentum 30
-    as long-side asset), returns all series needed for plots.
+    Downloads data, runs Config 7 (v2.1: Mom30 long-side with post-bear NIFTY
+    recovery overlay + slow-stress cooldown + panic-short drawdown confirmation
+    + momentum-gated gold rotation with macro confirmation + repo-haircut cash),
+    returns all series needed for plots.
     """
     WARMUP   = "2006-01-01"
     START    = "2008-04-01"
     END      = "2025-12-31"
-    TICKERS  = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS"]
+    # v1.4 added ^TNX (US 10Y) for macro-confirmed gold rotation gate
+    TICKERS  = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
 
     print("Downloading data ...", file=sys.stderr)
     raw = yf.download(TICKERS, start=WARMUP, end="2026-01-01",
                       auto_adjust=True, progress=False)["Close"]
     raw.dropna(how="all", inplace=True)
-    for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX"]:
+    for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "^TNX"]:
         if col in raw.columns:
             raw[col] = raw[col].ffill()
     if "GOLDBEES.NS" in raw.columns:
@@ -69,9 +71,15 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
     mom30 = load_nse_index_csv("data/momentum30_history.csv", "NIFTYMOM30")
     raw["NIFTYMOM30"] = mom30.reindex(raw.index).ffill()
 
-    # Config 6 (v1.3 production): Mom30 long-side, momentum-gated gold, repo-haircut cash
+    # Config 7 (v2.1 production):
+    #   Mom30 long-side with post-bear NIFTY recovery overlay (60d, 15% bear DD)
+    #   Slow-stress with 5-day cooldown
+    #   Panic-short with 15% drawdown confirmation
+    #   Momentum-gated gold rotation with macro confirmation (v1.5 bear-req)
     combiner = make_combiner(rotate_stress=True, rotate_panic=False,
-                             use_momentum_gold=True)
+                             use_momentum_gold=True,
+                             slow_stress_lock_days=5,
+                             panic_short_dd_threshold=0.15)
     strategy = MacroStrategy(
         combiner,
         nifty_cost_bps=nifty_cost_bps,
@@ -80,6 +88,7 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
         cash_yield_haircut_bps=cash_yield_haircut_bps,
         long_target="NIFTYMOM30",
         long_cost_bps=6,
+        enable_v2=True, v2_dd_threshold=0.15, v2_days=60,
     )
 
     res = strategy.run(raw).loc[START:END].copy()
@@ -144,21 +153,21 @@ def _base_ax(ax):
 def plot_equity_curve(bt, out_path):
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     ax.plot(bt["dates"], bt["strategy_cum"],
-            color=BLUE, linewidth=1.5, label="Strategy v1.3 (Mom30 long, 3/5/6 bps + repo-100bps)", zorder=3)
+            color=BLUE, linewidth=1.5, label="Strategy v2.1 (Mom30 long, 3/5/6 bps + repo-100bps)", zorder=3)
     ax.plot(bt["dates"], bt["nifty_cum"],
             color=GRAY, linewidth=1.5, label="NIFTY 50 Buy & Hold", zorder=2)
     ax.set_yscale("log")
-    # Extended range for v1.1: strategy ends ~10x, NIFTY ~5.5x
-    ax.set_yticks([0.5, 1, 2, 3, 5, 7, 10, 15, 20, 25])
-    ax.set_yticklabels(["0.5x", "1.0x", "2.0x", "3.0x", "5.0x", "7.0x", "10.0x", "15.0x", "20.0x", "25.0x"])
+    # v2.1: strategy ends ~17x post-tax (~28x pre-tax), NIFTY ~5.5x
+    ax.set_yticks([0.5, 1, 2, 3, 5, 7, 10, 15, 20, 30])
+    ax.set_yticklabels(["0.5x", "1.0x", "2.0x", "3.0x", "5.0x", "7.0x", "10.0x", "15.0x", "20.0x", "30.0x"])
     ax.minorticks_off()
-    ax.set_ylim(0.5, 25)
+    ax.set_ylim(0.5, 30)
     ax.set_axisbelow(True)
     ax.yaxis.grid(True, which="major", linestyle="-", linewidth=0.5, alpha=0.3)
     ax.xaxis.grid(False)
     ax.set_ylabel("Cumulative return (x)")
-    ax.set_title("Cumulative Returns — Strategy v1.3 (Mom30 long + momentum gold rotation + repo-haircut) vs NIFTY 50 (2008-2025)",
-                 fontsize=11, pad=10)
+    ax.set_title("Cumulative Returns — Strategy v2.1 (Mom30 long + recovery overlay + slow-stress cooldown + drawdown-gated panic-short) vs NIFTY 50 (2008-2025)",
+                 fontsize=10, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     fig.tight_layout()
@@ -185,7 +194,7 @@ def plot_drawdown(bt, out_path):
 
     ax.fill_between(dates, sdd, 0, color=BLUE, alpha=0.35, zorder=2)
     ax.plot(dates, sdd, color=BLUE, linewidth=1.2,
-            label="Strategy v1.3", zorder=3)
+            label="Strategy v2.1", zorder=3)
 
     ax.fill_between(dates, ndd, 0, color=GRAY, alpha=0.25, zorder=1)
     ax.plot(dates, ndd, color=GRAY, linewidth=1.2,
@@ -204,7 +213,7 @@ def plot_drawdown(bt, out_path):
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
     ax.set_ylabel("Drawdown")
-    ax.set_title("Drawdown — Strategy v1.3 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
+    ax.set_title("Drawdown — Strategy v2.1 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     fig.tight_layout()
@@ -233,7 +242,7 @@ def plot_yearly_returns(bt, out_path):
     n_plot = np.where(np.abs(n_ret) < MIN_VIS, np.sign(n_ret + 1e-9) * MIN_VIS, n_ret)
 
     fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
-    ax.bar(x - width / 2, s_plot, width, label="Strategy v1.3",
+    ax.bar(x - width / 2, s_plot, width, label="Strategy v2.1",
            color=BLUE, zorder=3)
     ax.bar(x + width / 2, n_plot, width, label="NIFTY 50 Buy & Hold",
            color=GRAY, zorder=3)
@@ -243,7 +252,7 @@ def plot_yearly_returns(bt, out_path):
     ax.set_xticklabels(years, rotation=45, ha="right", fontsize=8)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax.set_ylabel("Annual return (%)")
-    ax.set_title("Annual Returns — Strategy v1.3 vs NIFTY 50", fontsize=11, pad=10)
+    ax.set_title("Annual Returns — Strategy v2.1 vs NIFTY 50", fontsize=11, pad=10)
     ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     ax.grid(axis="x", visible=False)
@@ -267,7 +276,7 @@ def write_summary_csv(sm, nm, csv_path):
         ("calmar",                  round(sm["calmar"],       2),  round(nm["calmar"],       2)),
         ("ann_vol_pct",             round(sm["vol"]    * 100, 2),  round(nm["vol"]    * 100, 2)),
     ]
-    df = pd.DataFrame(rows, columns=["metric", "strategy_v13_config6", "nifty_buy_hold"])
+    df = pd.DataFrame(rows, columns=["metric", "strategy_v21", "nifty_buy_hold"])
     df.to_csv(csv_path, index=False)
     print(f"  Saved {csv_path}")
     return df
@@ -285,25 +294,25 @@ if __name__ == "__main__":
     sm, nm = compute_full_metrics(bt["res"])
     bd = position_breakdown(bt["res"])
 
-    print("\n--- Headline metrics (v1.3 Config 6: Mom30 long-side + momentum-gated gold + repo-100bps) ---")
-    print(f"  Cumulative return : {sm['total']*100:.1f}%  (expected ~2022%)")
-    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (expected ~18.08%)")
-    print(f"  Sharpe            : {sm['sharpe']:.2f}    (expected ~0.83)")
-    print(f"  Sortino           : {sm['sortino']:.2f}    (expected ~0.97)")
-    print(f"  Calmar            : {sm['calmar']:.2f}    (expected ~1.00)")
-    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (expected ~-18.1%)")
-    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (expected ~13.90%)")
+    print("\n--- Headline metrics (v2.1 Config 7: Mom30 + recovery overlay + slow-stress cooldown + drawdown-gated panic-short, post-tax) ---")
+    print(f"  Cumulative return : {sm['total']*100:.1f}%  (expected ~1624%)")
+    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (expected ~16.75%)")
+    print(f"  Sharpe            : {sm['sharpe']:.2f}    (expected ~0.84)")
+    print(f"  Sortino           : {sm['sortino']:.2f}    (expected ~1.01)")
+    print(f"  Calmar            : {sm['calmar']:.2f}    (expected ~1.31)")
+    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (expected ~-12.8%)")
+    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (expected ~12.16%)")
 
     print(f"\n  Position breakdown: long_nifty={bd['long_nifty']}  "
           f"short_nifty={bd['short_nifty']}  long_gold={bd['long_gold']}  "
           f"flat={bd['flat']}  total={bd['total']}")
 
-    # Tolerance check — v1.3 expected values
+    # Tolerance check — v2.1 expected values (post-tax)
     checks = [
-        ("Cumulative return", sm["total"]*100, 2022.6, 5.0),
-        ("CAGR",              sm["cagr"]*100,   18.08, 0.05),
-        ("Sharpe",            sm["sharpe"],      0.83, 0.02),
-        ("Max drawdown",      sm["max_dd"]*100, -18.1, 0.5),
+        ("Cumulative return", sm["total"]*100, 1624.0, 5.0),
+        ("CAGR",              sm["cagr"]*100,   16.75, 0.05),
+        ("Sharpe",            sm["sharpe"],      0.84, 0.02),
+        ("Max drawdown",      sm["max_dd"]*100, -12.78, 0.2),
     ]
     ok = True
     for label, got, expected, tol in checks:
