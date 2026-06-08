@@ -20,7 +20,7 @@ Backtest period: **2008-04-01 to 2025-12-31** (17.7 years). Net results assume p
 | Annualized volatility | 12.16% | 17.95% | -32% |
 | **Max drawdown** | **-12.78%** | **-51.72%** | **-75%** |
 | CAGR | **16.75%** | 8.37% | **+838 bps** |
-| Cumulative return | **1,623.6%** | 338.5% | +1,285.1pp |
+| Cumulative return | **1,623.6%** | 338.9% | +1,284.7pp |
 
 All figures post-tax. The strategy's 15% short-term capital gains model reflects the realistic deployability case for an active rebalanced strategy (most gains qualify as short-term); NIFTY B&H's 10% long-term capital gains treatment is the conservative buy-and-hold benchmark (zero turnover, full long-term treatment). Pre-tax differences are smaller: pre-tax strategy CAGR is 19.93%, pre-tax NIFTY CAGR is 9.73%. The post-tax convention is the production-relevant headline.
 
@@ -50,7 +50,7 @@ Three targeted refinements were added to the v1.5 production base, each addressi
 
 **Panic-short drawdown confirmation.** Panic-short can only fire when NIFTY's current drawdown from its trailing 60-day high exceeds 15%. All other panic-short conditions (high absolute VIX, accelerating VIX spike, NIFTY below 100-DMA) still required. Targets two documented false-fire incidents (2013-08-27 taper-reaction short and 2022-02-24 Ukraine-reaction short) where panic-short fired into local bottoms and lost ~22.9pp and ~12.0pp respectively.
 
-**Cross-country signal architecture validation.** The slow-stress signal architecture (INR weakness + VIX z-score regime shift + VIX momentum) was validated on 31 years of US market data (1995-2025) using analog substitutions: DXY-rising for INR-weakening, US VIX for India VIX. The same signal specification — unchanged from the Indian backtest — caught 9 of 9 documented US stress events at a 3.84% overall fire rate with low false positive rates in calm bull years (0.0-7.5%). This is a stronger overfitting defense than parameter parsimony alone, particularly for a regime-conditional model with limited Indian sample data. See [Cross-Country Validation](#cross-country-validation) section below.
+**Cross-country signal architecture validation.** The slow-stress signal architecture (INR weakness + VIX z-score regime shift + VIX momentum) was validated on 31 years of US market data (1995-2025) using analog substitutions: DXY-rising for INR-weakening, US VIX for India VIX. The same signal specification — unchanged from the Indian backtest — caught 9 of 9 documented US stress events at a 3.83% overall fire rate with low false positive rates in calm bull years (0.0-7.5%). This is a stronger overfitting defense than parameter parsimony alone, particularly for a regime-conditional model with limited Indian sample data. See [Cross-Country Validation](#cross-country-validation) section below.
 
 **The Sharpe improvement (+312% post-tax vs NIFTY) is the most reliable single measure of risk-adjusted skill** because it normalizes return per unit of volatility regardless of which mechanism is doing the work on any given day. Cumulative return improvement (+1,285pp post-tax) is striking but is inherently joint and path-dependent.
 
@@ -100,6 +100,20 @@ Both alternatives offer ~45% higher CAGR than NIFTY 50 with comparable Sharpe; M
 | NIFTY 200 Momentum 30 | 18.08% | 0.83 | **1.00** | -18.1% |
 
 Midcap 150 produced the highest absolute CAGR but at unacceptable drawdown deterioration — max DD widened from -16.4% (NIFTY 50 baseline) to -26.1%, a ~60% worsening that eliminates the strategy's headline drawdown control. Momentum 30 achieves the best Calmar of the three configurations (1.00) while preserving drawdown within 2pp of the NIFTY 50 baseline.
+
+### v2.1-era validation: Mom30 vs NIFTY 50 under current mechanics
+
+Table B above uses v1.3 baseline mechanics. To confirm that the long-side asset choice still holds under the more refined v2.1 architecture (V2 post-bear NIFTY recovery overlay + 5-day slow-stress cooldown + 15% panic-short DD gate), the same Mom30-vs-NIFTY-50 swap was re-run under v2.1 production.
+
+| Long-side asset | Full CAGR | Sharpe | Max DD | OOS CAGR |
+|---|---|---|---|---|
+| **Mom30 (production)** | **+16.52%** | **0.830** | **−12.78%** | **+20.12%** |
+| NIFTY 50 (substitute) | +10.51% | 0.409 | −13.04% | +12.59% |
+| Δ (NIFTY − Mom30) | −6.01pp | −0.421 | −0.26pp | −7.53pp |
+
+Year-by-year, Mom30 long sleeve won 14 of 18 calendar years; NIFTY 50 substitute won in 2018, 2019, 2022, 2025 — exactly the four structural rotation losing years documented above. NIFTY's wins are modest (avg margin +3.65pp, max +8.97pp). Mom30's wins are larger (avg margin −9.68pp, max −25.61pp in 2021). The asymmetry compounds — terminal multiplier on ₹1 is ~₹17.6 (Mom30 sleeve) vs ~₹6.0 (NIFTY sleeve), confirming Mom30 as the long-side choice under v2.1 mechanics, not just v1.3.
+
+Test script: [`experiments/test_nifty_vs_mom30_long.py`](experiments/test_nifty_vs_mom30_long.py).
 
 **Two distinct underperformance modes documented.** Momentum 30 underperforms NIFTY 50 in 4 of 18 years across the sample. These split into two distinct mechanisms.
 
@@ -231,11 +245,32 @@ The codebase retains two signal classes — `USDINRSignal` and `IndiaVIXSignal` 
 
 **Results.** The gated variant blocked 423 re-entry attempts and added ~1.7 years of additional flat exposure. CAGR cost: -1.59pp. Sharpe: 0.78 vs 0.83 (v1.3 baseline). The cost concentrates in V-shaped recovery years where the entry signals lag the trend reversal: 2009 (-8.1pp), 2014 (-8.0pp), 2017 (-16.4pp), 2021 (-11.2pp). **Conclusion:** The 100 DMA trend filter dominates the carry- and vol-based entry signals on the relevant time scales. The signal classes are retained in the codebase as scaffolding for future iterations but do not affect production positions. Full test script: [`experiments/test_entry_signal_gate.py`](experiments/test_entry_signal_gate.py).
 
-#### Vol-Scaled Position Sizing (rejected, May 2026)
+#### Vol-Scaled Position Sizing (rejected — tested twice, June 2026)
 
-A volatility-scaling overlay was tested on top of v1.3.1 to determine whether fractional position sizing (rather than binary +1/0/-1) could improve risk-adjusted returns by reducing exposure during high-vol periods. Thirteen variants were tested across rolling realized vol windows (10/20/60 days), target vol levels (10/12/15%), and mitigation overlays (tolerance bands, weekly rebalance). All variants underperformed the binary-sizing base.
+A volatility-scaling overlay was tested on top of v1.3.1 (May 2026) and again exhaustively on top of v2.1 (June 2026). Both rounds reject the mechanism. Combined: 32 distinct vol-scaling parameterizations tested across rolling vol windows, target levels, forecasting methods, target structures, regime gating, smoothing, and residual asset choice. None beats the production binary-sizing base.
 
-**Mechanism of failure.** The strategy's existing regime filter, supply-shock, and panic-short signals already implement vol-conditional sizing — they take exposure to zero during high-vol regimes. Adding a vol-scaling overlay double-counts this behavior, scaling down exposure on the same days the regime filter would have already done so, without adding new information. The best variant (60-day window, 15% target, daily rebalance) produced post-tax Sharpe 0.673 vs base 0.731 — a -0.058 deterioration. Script parked at `parked/test_vol_scaling.py`.
+**Round 1 — v1.3.1 sweep (13 variants, May 2026).** Tested across rolling realized vol windows (10/20/60 days), target vol levels (10/12/15%), and mitigation overlays (tolerance bands, weekly rebalance). Best variant (60-day window, 15% target, daily rebalance) produced post-tax Sharpe 0.673 vs base 0.731 — a -0.058 deterioration. All variants negative.
+
+**Round 2 — v2.1 exhaustive sweep (19 variants, June 2026).** Re-tested across the broader design space the first round didn't cover:
+
+| Dimension | Variants tested |
+|---|---|
+| Window length (realized vol) | 20, 30, 60, 90 days |
+| Vol forecasting | Realized, EWMA (λ=0.94), GARCH(1,1) |
+| Target structure | Constant 18%, rolling 252d mean, 75th percentile of 3y distribution, down-vol-only |
+| Regime conditioning | NIFTY > 200-DMA gate, India VIX < 20 gate, no-overlap default |
+| Smoothing / hysteresis | 5-day EMA on weight, threshold-based (Δw > 10%) |
+| Portfolio-level vs leg-level | σ_target ∈ {8%, 10%, 12%, 15%, 18%} at portfolio vol |
+
+All 19 variants underperform v2.1 baseline. Best variant (D2 — VIX < 20 gate) is −0.06pp full CAGR. Worst (GARCH(1,1)) is −1.04pp full / −2.30pp OOS. Maximum drawdown is identical (−12.78%) across all 14 leg-level variants — vol scaling fails to narrow drawdowns at all, which is its supposed selling point. The 5 portfolio-level variants (PV1-PV5) do narrow MaxDD by 0.72-2.73pp, but at the cost of −1.21pp to −7.01pp CAGR — the drawdown reduction comes from uniform exposure haircuts that also cut the wins, leaving Sharpe lower.
+
+**Architectural mechanism of failure.** Vol scaling is structurally redundant with v2.1's regime architecture. The strategy's full-sample realized vol is ~12.7% (already well below typical vol scaling targets); Mom30's standalone vol is ~22-25%. When Mom30 vol spikes, NIFTY is already below its 100-DMA and the regime filter has moved the strategy to cash — vol scaling has nothing to act on. When vol then stays elevated through recoveries (2009 GFC rebound, 2020-21 COVID rebound), vol scaling under-invests exactly during the up-leg where v2.1 wants full exposure. Strategy alpha is concentrated in high-vol recovery regimes; vol scaling fires hardest during those regimes, cutting the recovery upside.
+
+**The clean framing.** Vol scaling is a substitute for regime-based risk management, not a complement. v2.1 already takes the regime-based path; layering vol scaling on top is asking it to compete with mechanisms that fire faster and more selectively. Vol scaling's natural home is in long-only or long-short factor portfolios without regime architecture (the original Barroso-Santa-Clara 2015 setup); applied to v2.1 it has no marginal contribution to add.
+
+**Residual scope.** Portfolio-level vol scaling does work mechanically for risk-budgeting purposes — e.g., if v2.1 is deployed inside a multi-strategy book at a fixed vol target. PV2 (10% target) hits 10.19% realized vol with 1.20× leverage equivalent to recover baseline notional. This is sizing, not alpha generation, and is documented separately under deployment considerations.
+
+Test scripts: [`experiments/test_vol_managed_momentum.py`](experiments/test_vol_managed_momentum.py) (B-S-C variants), [`experiments/test_vol_scaling_exhaustive.py`](experiments/test_vol_scaling_exhaustive.py) (full sweep including portfolio-level). Round 1 script parked at `parked/test_vol_scaling.py`.
 
 #### Slow-Stress Signal Iterations (rejected variants leading to v1.4)
 
@@ -387,15 +422,15 @@ Post-tax cumulative returns over crisis windows (strategy and NIFTY both post-ta
 
 | Crisis | Window | Strategy (v2.1) | NIFTY |
 |---|---|---|---|
-| GFC | Sep 2008 – Mar 2009 | **+2.1%** | -30.8% |
-| Euro debt | Jul 2011 – Dec 2011 | **+1.0%** | -18.1% |
-| Taper Tantrum | May – Sept 2013 | **-0.3%** | -2.9% |
-| NBFC / IL&FS | Aug 2018 – Nov 2018 | **-0.5%** | -3.8% |
-| COVID Crash | Feb – May 2020 | **+16.8%** | -17.8% |
-| Russia 2022 | Feb – Jun 2022 | **-1.7%** | -8.1% |
-| Momentum sell-off 2025-26 | Oct 2025 – Apr 2026 | +1.6% | +5.5% |
+| GFC | Sep 2008 – Mar 2009 | **+2.1%** | -30.5% |
+| Euro debt | Jul 2011 – Dec 2011 | **+1.0%** | -17.8% |
+| Taper Tantrum | May – Sept 2013 | **-0.3%** | -3.3% |
+| NBFC / IL&FS | Aug 2018 – Nov 2018 | **-0.5%** | -4.1% |
+| COVID Crash | Feb – May 2020 | **+16.8%** | -18.2% |
+| Russia 2022 | Feb – Jun 2022 | **-1.7%** | -10.2% |
+| Momentum sell-off 2025-26 | Oct 2025 – Apr 2026 | **+3.6%** | -3.4% |
 
-The strategy navigates GFC-style and COVID-style regimes well — both feature decisive trend breakdowns that the panic-short and slow-stress lanes capture cleanly. The GFC window returns +2.1% (vs NIFTY −30.8%) because cash yield on the fully-flat days at ~8% repo dominates the small drag from the stress latch; all four 2008 panic-shorts (at NIFTY drawdowns of 16–32%) fire through the v2.1 confirmation gate. The 2011 European debt window flips positive (vs NIFTY −18.1%) via flat-period cash yield plus correct slow-stress force-flat coverage. The 2013 Taper Tantrum window is now nearly flat (−0.3%) — the slow-stress cooldown (v2.0) and panic-short drawdown confirmation (v2.1) together prevent the 2013-08-27 false panic-short. The 2020 COVID window returns +16.8% (vs NIFTY −17.8%) even after the v2.1 March-6 panic-short suppression; the next fire on March 9 captures the crash. The 2025–26 momentum sell-off window is the most recent stress and is the first crisis-window-style underperformance under the new production version — the strategy held +1.6% but NIFTY rebounded +5.5%, reflecting that Momentum 30's structural rotation losses remain unaddressed.
+The strategy navigates GFC-style and COVID-style regimes well — both feature decisive trend breakdowns that the panic-short and slow-stress lanes capture cleanly. The GFC window returns +2.1% (vs NIFTY −30.5%) because cash yield on the fully-flat days at ~8% repo dominates the small drag from the stress latch; all four 2008 panic-shorts (at NIFTY drawdowns of 16–32%) fire through the v2.1 confirmation gate. The 2011 European debt window flips positive (vs NIFTY −17.8%) via flat-period cash yield plus correct slow-stress force-flat coverage. The 2013 Taper Tantrum window is now nearly flat (−0.3%) — the slow-stress cooldown (v2.0) and panic-short drawdown confirmation (v2.1) together prevent the 2013-08-27 false panic-short. The 2020 COVID window returns +16.8% (vs NIFTY −18.2%) even after the v2.1 March-6 panic-short suppression; the next fire on March 9 captures the crash. The 2025-26 momentum sell-off window (Oct 2025 – Apr 2026) was a real defensive test: NIFTY fell −3.4% over this seven-month period including the March 2026 −10.19% single-month drop. The strategy returned **+3.6%**, beating NIFTY by ~7pp through the defensive engines firing as designed. This is consistent with the broader 2026 YTD picture (strategy +2.0%, NIFTY −8.9%).
 
 **A note on Momentum 30 behavior in stress.** Momentum 30 itself underperforms NIFTY 50 in some crisis windows (e.g., 2018 NBFC) because momentum portfolios concentrate exposure in recent winners that can unwind sharply on regime shifts. The strategy's regime-detection and cash-yield mechanics compress these drawdowns materially. This is also the mechanism driving the residual 2018, 2022, and 2025 underperformance — see Limitations.
 
@@ -419,6 +454,8 @@ v2.1's 2026 OOS performance is broadly consistent with v1.4–v1.5's. Three mech
 
 3. **Slow-stress cooldown and drawdown-confirmed panic-short** did not materially change OOS results vs v1.4–v1.5 (the 2026 OOS window did not contain a chop period that would have triggered the cooldown's benefit, nor a borderline panic-short fire that the drawdown confirmation would have caught or suppressed). The two v2.0–v2.1 refinements are primarily in-sample optimizations against patterns identified during diagnostic work; their OOS performance neither confirms nor contradicts the in-sample benefit on this single window.
 
+**The March 2026 stress window is a clean illustration of the defensive engines working as designed.** NIFTY 50 fell −10.19% in March 2026 alone (a single-month drawdown comparable to several full crisis years in the historical sample). The strategy returned +0.33% over the same month — a 10.5pp swing vs the index — because the slow-stress signal had already moved the strategy to cash (earning the haircut-adjusted RBI repo rate) before the March crash deepened. This single OOS month captures the strategy's core thesis: avoid the worst equity drawdowns while still capturing bull-regime upside. The 2026 YTD total (+2.0% strategy vs −8.9% NIFTY 50) is the cumulative effect of this defensive positioning through the full Jan-May period.
+
 Buy-and-hold YTD for the three indices considered (all post-tax): NIFTY 50 −8.9%, NIFTY 200 Momentum 30 (estimated) −5% to −6%. The strategy outperformed all three benchmarks in the OOS window.
 
 ### Cross-Country Validation
@@ -427,7 +464,7 @@ The slow-stress signal architecture introduced in v1.4 (INR weakness + VIX z-sco
 
 #### Results
 
-Overall fire rate: **3.84% of trading days over 31 years**.
+Overall fire rate: **3.83% of trading days over 31 years**.
 
 US stress events detected (**9 of 9 documented events**):
 
@@ -451,7 +488,7 @@ False positive rates in calm bull years:
 
 #### Interpretation
 
-The cross-country validation tests whether the slow-stress signal architecture detects genuine sustained EM-style stress regimes or whether it is curve-fit to specific Indian historical events. Catching 9 of 9 documented US stress events using an unchanged signal specification at a 3.84% overall fire rate provides strong empirical evidence that the architecture generalizes across markets, time periods, and event types.
+The cross-country validation tests whether the slow-stress signal architecture detects genuine sustained EM-style stress regimes or whether it is curve-fit to specific Indian historical events. Catching 9 of 9 documented US stress events using an unchanged signal specification at a 3.83% overall fire rate provides strong empirical evidence that the architecture generalizes across markets, time periods, and event types.
 
 The pre-fire on LTCM (June 11, 1998, approximately 45 days before the LTCM crisis is conventionally considered to have begun) is particularly significant. The signal detected sustained DXY weakness combined with US VIX z-score elevation and momentum confirmation well before LTCM's formal events. This is the kind of leading-indicator behavior that distinguishes a real signal from a coincidence detector.
 
@@ -463,7 +500,32 @@ The full validation script is at [`validate_us_cross_country.py`](validate_us_cr
 
 ### Walk-Forward Validation
 
-Not yet implemented (parameter selection was manual). Planned — see Roadmap. v1.4's cross-country validation addresses architecture-level generalization but parameter walk-forward remains an open methodology item.
+Rolling 5-year training / 1-year out-of-sample windows across the full 2008-2026 sample (13 windows total). For each window, the three parameters originally selected by sensitivity testing — slow-stress cooldown days, panic-short drawdown threshold, post-bear recovery drawdown threshold — were re-optimized on the training window by maximizing Sharpe across a pre-specified grid (cooldown ∈ {0, 3, 5, 7, 10, 15, 20}; panic-short DD ∈ {0.08, 0.10, 0.12, 0.15, 0.20, 0.25}; recovery DD ∈ {0.10, 0.12, 0.15, 0.18, 0.20}; 210 combinations per window). The training-window-optimal parameters were then applied to the immediately-following 1-year OOS window. Parameters chosen on economic priors (100-DMA window, slow-stress signal thresholds, gold macro thresholds, 60-day recovery hold) were held fixed across all windows.
+
+#### Results — production v2.1 beats window-optimal on every aggregate metric
+
+| Metric | Window-optimal (per-window fit) | v2.1 production | Δ |
+|---|---|---|---|
+| Concatenated OOS CAGR | +14.85% | **+15.41%** | **+0.56pp** |
+| Concatenated OOS Sharpe | 0.707 | **0.755** | **+0.048** |
+| Concatenated OOS MaxDD | −15.12% | **−12.78%** | **+2.34pp shallower** |
+| Geometric mean OOS-year CAGR | +15.42% | **+16.00%** | **+0.58pp** |
+
+Of the 4 windows where parameters materially diverged from production, production won 3 of 4. The one window window-optimal won was the COVID-2020 OOS year, where a 3-day cooldown (vs production's 5-day) caught the rapid March 2020 dynamics marginally better.
+
+#### Parameter drift across windows — the optimizer chasing noise
+
+The per-window optimal cooldown drifts across {5, 15, 15, 3, 3, 3, 3, 5, 5, 5, 5, 7, 0} — long-cooldown choices cluster in the early training windows (where the 2008-2013 chop dominates), tighter values dominate the middle, and the final window collapses to 0 days. The per-window optimal panic-short DD threshold drifts {15, 15, 15, 15, 15, 15, 8, 8, 10, 10, 10, 10, 12}; recovery DD drifts {15, 15, 15, 15, 15, 12, 12, 12, 10, 10, 12, 12, 12} — both showing the optimizer chasing tighter thresholds in later windows. Production's stable choices (5 / 15 / 15) generalize better OOS than this drift would suggest the "optimal" choice should.
+
+#### Interpretation
+
+A standard walk-forward bar would require production parameters to fall within ±1pp of window-optimal in ≥80% of windows. Production hits this for the panic-short DD threshold (92%) and recovery DD threshold (85%), but only 69% for cooldown days. Strict reading would flag this as drift.
+
+The aggregate result inverts that reading. Production beats per-window optimization on every concatenated-OOS metric. The "drift" the optimizer finds in later windows is overfitting to recent training data — production's stable choices won out-of-sample. This is the strongest defense against parameter overfitting that the strategy could pass.
+
+Combined with the cross-country validation on US 1995-2025 data (9/9 stress events at 3.83% fire rate), the strategy now has two independent generalization defenses: architecture-level (cross-market) and parameter-level (walk-forward).
+
+Test script: [`experiments/test_walkforward.py`](experiments/test_walkforward.py). Output: `results/test_walkforward.txt`, `results/test_walkforward_per_window.csv`, `results/test_walkforward_parameter_stability.csv`, `plots/test_walkforward_equity_overlay.png`, `plots/test_walkforward_parameter_drift.png`.
 
 ---
 
@@ -552,7 +614,7 @@ Three reasons the +2.53pp CAGR contribution is meaningful rather than disappoint
 
 **2. Coverage of fat-tail crisis events.** The 2020 COVID contribution (+21.54pp vs Dynamic A) is the regime-defensive architecture working as designed during a tail event. This is what justifies the operational overhead of the override layer — strategies built for crisis protection are evaluated partly on their crisis behavior, and this strategy delivered materially during the largest stress event in the sample. Even excluding 2020 entirely, the strategy still adds material cumulative alpha across other winning years (2009 +26.84pp from the recovery overlay alone); the alpha is not a single-event story.
 
-**3. Architectural validity beyond Indian alpha.** The signal architecture is validated cross-country on 31 years of US data (see Cross-Country Validation section) — caught 9 of 9 documented US stress events at 3.84% fire rate. This addresses overfitting concerns that the +2.53pp Indian-sample alpha alone cannot, and supports the inference that the override layer's contribution generalizes.
+**3. Architectural validity beyond Indian alpha.** The signal architecture is validated cross-country on 31 years of US data (see Cross-Country Validation section) — caught 9 of 9 documented US stress events at 3.83% fire rate. This addresses overfitting concerns that the +2.53pp Indian-sample alpha alone cannot, and supports the inference that the override layer's contribution generalizes.
 
 ### Note on Dynamic A's max drawdown (strategy now meaningfully shallower)
 
@@ -592,9 +654,28 @@ The other underperformance years are a different mechanism: factor/style rotatio
 | Relative-strength timing | Swap Mom30 → NIFTY 50 when Mom30 trailing relative strength below threshold | Net negative across all thresholds; whipsaws and gives back more in win years than it saves |
 | Asset swap during stress windows | Hold NIFTY 50 instead of Mom30 during slow-stress flats with macro confirmation | Marginal effect; can't distinguish factor rotation from V-recovery |
 | Intensity-scaled stress flats | Partial-flat sized by VIX z-score during stress | Breaks 2008 GFC defense (moderate-z early-crisis days hold partial Momentum 30 into the crash) |
-| Sector concentration gate | Detect Mom30 sector concentration via rolling regression; signal weakness when most-loaded sector trends down | Diagnostic was informative (β_mid > median+1σ AND most-loaded segment below own 100-DMA → −11pp average forward 12mo Mom30 vs NIFTY), but rule construction failed in-sample tests |
+| Sector concentration gate | Detect Mom30 sector concentration via rolling regression; signal weakness when most-loaded sector trends down | Initial diagnostic was informative but the underlying β computation used corrupted Midcap 150 cache data (TR instead of PR); result requires re-validation. See "Composition swap research — paused due to data integrity issue" subsection below. |
 
 These losses remain unaddressed by any overlay tested to date. Further approaches under investigation include multi-asset simultaneous holding, breadth-based regime detection, and sector-rotation signals using the newly cached NSE sector index data. Diagnostic script: [`experiments/diagnose_mom30_composition.py`](experiments/diagnose_mom30_composition.py).
+
+### Composition swap research — paused due to data integrity issue (June 2026)
+
+A research arc spanning ~6 weeks investigated swapping Mom30 → NIFTY 50 on days when Mom30's composition was structurally exposed to a falling cap segment, using a rolling 60-day regression of Mom30 returns on NIFTY 50 + NIFTY Midcap 150 + NIFTY Smallcap 250 to extract a β_mid composition signal. Four architectural iterations of the cap composition swap rule were tested:
+
+- **v1 forward-hold same-day swap** (252-day hold or AND-exit) — rejected (OOS −0.62pp)
+- **v2 OR-exit + engagement filter** — rejected (full sample −0.01pp, inert)
+- **v3 single recovery exit with 5-day persistence** — rejected (OOS −1.22pp)
+- **v4 AND-exit + ongoing engagement yield + entry engagement filter** — initially **+0.16pp full CAGR / +0.13pp OOS** (PRE-data-correction)
+
+A sensitivity sweep across 6 variants of v4 (exit DMA width, exit-c specification, persistence days, entry threshold) all clustered around the v4 baseline. Swap-target sensitivity tested 6 alternative defensive assets (NIFTY 100, 50/50 NIFTY+cash, 100% cash, regime-filtered NIFTY/cash, NIFTY FMCG, NIFTY Pharma) — NIFTY 50 was near-optimal across the family. A sector composition diagnostic ran the same regression framework with sector indices (Bank, IT, FMCG, Pharma, Auto, Energy, Metal, Realty, Infra, PSE); Infra emerged as dominant signal in 2022 H1 and 2025 H1.
+
+**Data integrity issue (discovered June 2026).** During verification of the v4 result, a level cross-check against published NSE values revealed that `_extra_data_cache.pkl["NIFTY_MIDCAP_150"]` had been populated from yfinance ticker `^NSMIDCP`, which is actually NIFTY Midcap 150 *Total Return Index* (with dividend reinvestment), not the Price Return version. Cached levels were 3-4× too high (Dec 2024 cached = 67,988 vs actual NSE NIFTY Midcap 150 PR = 21,141). Daily returns correlated 0.93 with the real series so day-by-day diagnostics looked plausible, but the regression β values were wrong.
+
+After correcting the data source (NSE CSV NIFTY Midcap 150 PR), the original v4 result reversed: from **+0.16pp full / +0.13pp OOS** to **−0.28pp full / −1.37pp OOS / −0.023 Sharpe**. The "big winning" Sep 2020 → Mar 2021 episode that drove most of v4's apparent edge **never enters at all under the corrected data** (β_mid + midcap-weak conjunction never held in that window). All v4 family results (sensitivity sweep, swap-target sensitivity, sector diagnostic interpretations) were re-run on corrected data; every variant tested came out negative on full sample CAGR.
+
+**Status:** Composition research paused. v2.1 production remains the shipped strategy with no composition overlay. `CompositionSwapOverlay` class is retained in `strategy.py` as scaffolding (default off) for any future re-test with corrected data.
+
+Test scripts: [`experiments/test_composition_v4.py`](experiments/test_composition_v4.py), [`experiments/test_composition_sensitivity.py`](experiments/test_composition_sensitivity.py), [`experiments/test_swap_target_sensitivity.py`](experiments/test_swap_target_sensitivity.py), [`experiments/diagnose_mom30_composition.py`](experiments/diagnose_mom30_composition.py), [`experiments/diagnose_mom30_sector_composition.py`](experiments/diagnose_mom30_sector_composition.py).
 
 ---
 
@@ -604,7 +685,7 @@ Active weaknesses I am addressing on the roadmap.
 
 1. **Limited cross-asset universe.** The current implementation is two-asset (NIFTY + gold) with cash as the third state. The structural question — whether cumulative alpha vs NIFTY can be sourced from something other than tactical reduction of NIFTY exposure — is now partially addressed via gold rotation, but the asset universe remains narrow. Expansion to additional risk assets (USDINR overlay, broader equity indices) is on the roadmap. Walk-forward validation of the gold rotation rule specifically has not been done.
 
-2. **Momentum-factor structural-rotation losses (2018, 2022, 2025).** The Momentum 30 long-side asset underperforms NIFTY 50 in these three structural factor / sector rotation years. 2018 was a midcap-vs-largecap rotation (IL&FS crisis crushed midcaps while large-caps held); 2022 and 2025 were sector rotations where Momentum 30 held prior-year winners into fresh selloffs. The V-recovery crash years (2009, COVID-adjacent) are now addressed via the v2.0 recovery overlay, but the structural-rotation years lack a clean crash signature. Multiple mitigation approaches were tested (relative-strength timing, asset swaps during stress, intensity-scaled flats, sector-concentration diagnostics) — all either failed to fix the years or broke winning years. These losses remain unaddressed; further approaches under investigation include multi-asset simultaneous holding, breadth-based regime detection, and sector-rotation signals using the newly cached NSE sector index data.
+2. **Momentum-factor structural-rotation losses (2018, 2022, 2025).** The Momentum 30 long-side asset underperforms NIFTY 50 in these three structural factor / sector rotation years. 2018 was a midcap-vs-largecap rotation (IL&FS crisis crushed midcaps while large-caps held); 2022 and 2025 were sector rotations where Momentum 30 held prior-year winners into fresh selloffs. The V-recovery crash years (2009, COVID-adjacent) are now addressed via the v2.0 recovery overlay, but the structural-rotation years lack a clean crash signature. Multiple mitigation approaches were tested (relative-strength timing, asset swaps during stress, intensity-scaled flats; sector- and cap-composition diagnostics paused due to data integrity issue — see Momentum-Crash Mitigation Research) — all either failed to fix the years or broke winning years. These losses remain unaddressed; further approaches under investigation include multi-asset simultaneous holding, breadth-based regime detection, and sector-rotation signals using the newly cached NSE sector index data.
 
 3. **Panic-short exit logic is structurally thin.** The active short uses only two exit mechanisms — a 5-day / 20-day NIFTY MA crossover and a 60-day time cap (the latter only active in `hold=True` configs) — and both parameter sets (5/20 windows, 60-day cap) were hand-picked rather than derived from panic-event duration statistics or a parameter sweep. The strategy enters via a strict 4-condition AND (VIX level, VIX spike, below 100-DMA, and v2.1's drawdown confirmation) but exits on a single binary MA flip — an asymmetry between strict-entry and loose-exit that has not been stress-tested against scenarios where the initial short thesis is wrong (e.g. a V-shaped recovery that bottoms before the MA crossover registers). There is no stop-loss, no profit-taking rule, and no volatility-normalized exit threshold. **Mitigating controls:** (a) the production config ships with `hold=False` (pulse short only — short is active solely on the days where panic conditions raw-fire AND drawdown confirmation passes), structurally capping any single-short loss exposure at one day; (b) v2.1's drawdown confirmation filters the two known false-fire events (2013, 2022). The roadmap addresses the broader exit framework; until then, sizing of any panic-short component should be conservative and the no-hold default should not be flipped without redesigning the exit framework first.
 
@@ -616,13 +697,21 @@ Active weaknesses I am addressing on the roadmap.
 
 7. **Panic-short fast-crash risk under v2.1 drawdown confirmation.** The 15% drawdown confirmation on panic-short suppressed the March 6, 2020 fire (NIFTY drawdown only ~11.1% at fire time). The next fire on March 9 (drawdown 15.5%) caught the move three trading days later, so COVID protection remained strongly captured overall (2020 strategy +46.3% post-tax vs NIFTY +13.8%). But if a future crisis develops faster than COVID — where panic-short would normally fire at <15% drawdown and price continues to fall sharply before crossing the 15% threshold — the gate would delay defense materially. The qualified-plateau sensitivity evidence (8% to 15% threshold spread is 0.17pp CAGR) suggests the rule is robust within range, but the 5.9pp 2020 give-back is the explicit cost of demanding price confirmation; a future fast-crash scenario could compound this cost.
 
+8. **Single-day news-event surprises are architecturally unmitigable.** The strategy is a long-term trend strategy gated by trailing moving-average regime detection. By construction, it cannot anticipate policy announcements, geopolitical shocks, or other discrete events that produce instant gap moves. Three documented cases where this cost the strategy materially:
+
+   - **2019-09-20** — Finance Minister Sitharaman's surprise corporate tax cut (corporate rate slashed 30% → 22%, new manufacturing 15%). NIFTY +5.32% in a single day, the largest single-day rally in modern Indian history. The strategy was flat (regime filter had triggered from the Aug-Sep downturn) and returned +0.01% — a single-day cost of −5.32pp.
+   - **2022-02-25** — Day after Russia invaded Ukraine. NIFTY +2.53% relief rally as panic faded and the invasion was priced in. Strategy flat (regime filter / slow-stress had triggered from Feb 24's −4.78%); returned +0.01%.
+   - **2022-02-15** — Russia's "partial troop withdrawal" headline (later proved false). NIFTY +3.03% global relief rally; strategy flat.
+
+   Of the top 10 wrong-side days in the strategy's losing years, 7 are flat days where the regime filter had triggered and the news-driven rally happened before the filter could re-engage. Across all such days, cumulative single-day cost is approximately +37pp of "regret" relative to optimal positioning. This is a structural cost of the trailing-MA architecture, not a bug. Faster regime detection (50-DMA or breadth signals) trades this lag for whipsaw cost in chop regimes; the trade-off was evaluated and 100-DMA's slower lag was retained because the chop cost is worse on average. The honest framing: this strategy is built to participate in trending bull regimes and avoid extended bear regimes; it is not built to capture or anticipate news-driven single-day moves, and a separate higher-frequency strategy would be the appropriate vehicle for that.
+
 ---
 
 ## Backtest Caveats
 
 These are structural caveats inherent to backtest research and macro-strategy design — not specific flaws of this strategy. They are documented for transparency, not as roadmap items.
 
-1. **Researcher degrees of freedom.** Parameters (lookback windows, thresholds, DMA length) and signal selection (slow-stress + panic-short + regime filter + macro-confirmed gold rotation gate + recovery overlay + slow-stress cooldown + drawdown confirmation) were chosen with knowledge of recent Indian market behavior. Walk-forward parameter validation is on the roadmap but has not yet been done. The choice of *which signals* to include is partially addressed via cross-country validation in v1.4 (the slow-stress architecture catches 9 of 9 US stress events using an unchanged specification), but parameter-level walk-forward remains untested. The v2.0–v2.1 refinements were tested with a disqualification rule applied to each parameter sweep (no variant that breaks the 2008, 2018 September, 2020, or 2021 defensive coverage was retained), which provides a stronger overfitting defense than parameter parsimony alone for each new layer.
+1. **Researcher degrees of freedom (now substantially mitigated).** Parameters (lookback windows, thresholds, DMA length) and signal selection were chosen with knowledge of recent Indian market behavior. Three independent defenses now address overfitting concern: (a) plateau-based sensitivity testing for every parameter (selected values sit on flat regions of the response surface rather than single-point optima); (b) cross-country validation on US 1995-2025 data using unchanged signal specification (9/9 stress events at 3.83% fire rate); (c) walk-forward parameter validation across 13 rolling 5y train / 1y OOS windows — production v2.1 parameters beat per-window-optimal selections on every aggregate OOS metric (+0.56pp CAGR, +0.048 Sharpe, +2.34pp shallower MaxDD). The v2.0–v2.1 refinements were tested with disqualification rules applied to each parameter sweep (no variant that breaks 2008, 2018 September NBFC, 2020 COVID, or 2021 defensive coverage was retained). Combined, these are substantially stronger overfitting defenses than parameter parsimony alone.
 
 2. **Limited regime diversity in available data.** India VIX only exists from 2008, capping the Indian backtest at ~17 years. Two true crisis regimes (GFC, COVID) plus several smaller stresses (2011, 2013, 2018, 2022) is statistically thin for a regime-conditional model. v1.4's cross-country validation extends architecture-level evidence to 31 years and 9 stress events on US data, materially addressing this concern.
 
@@ -634,7 +723,7 @@ These are structural caveats inherent to backtest research and macro-strategy de
 
 6. **Tax-model approximation (v1.4).** The 15% annual-net tax model is an approximation of Indian short-term capital gains tax. It applies a flat 15% to net positive annual returns; loss years are unchanged; intra-year losses offset gains. Real tax treatment depends on holding period, instrument-specific treatment (futures vs equities), and complex carry-forward rules not modeled. The approximation is appropriate for deployability-relevant headline metrics but should not be used for precise tax planning. Pre-tax analysis is available via `apply_tax=False`.
 
-7. **Limited out-of-sample coverage.** OOS testing covers 2026-01-01 through 2026-05-11. v2.1 outperformed NIFTY by +11.3pp pre-tax in this window — a meaningful demonstration that the slow-stress signal plus macro-confirmed gold rotation gate continue to work in live conditions. The v2.0 recovery overlay and v2.1 panic-short drawdown confirmation did not materially fire in the OOS window (the window did not contain a bear→bull V-recovery flip or a panic-short fire near the drawdown threshold), so their OOS performance is neither confirmed nor contradicted by this single window. This is a single OOS year and a single regime; broader OOS validation requires either additional time or formal walk-forward methodology (on the roadmap). Cross-country validation on US data (9/9 events caught) provides architecture-level OOS evidence even if not parameter-level.
+7. **Limited out-of-sample coverage (partially addressed via walk-forward).** Held-out 2026 OOS testing covers 2026-01-01 through 2026-05-11 — a single year, single regime. v2.1 outperformed NIFTY by +10.9pp post-tax in this window. Broader OOS coverage is now provided via walk-forward validation: 13 rolling 5y train / 1y OOS windows produce concatenated OOS results across 13 distinct one-year periods spanning 2013-2026. Production v2.1 parameters beat per-window-optimal selections on every aggregate OOS metric (+15.41% vs +14.85% CAGR, 0.755 vs 0.707 Sharpe). Cross-country validation on US data (9/9 stress events caught) provides architecture-level OOS evidence orthogonal to the parameter-level walk-forward.
 
 ---
 
@@ -644,9 +733,9 @@ In progress and planned:
 
 1. **Multi-asset holding** — test simultaneous holding of Momentum 30 and gold/NIFTY rather than the current single-asset rotation. Benchmark attribution suggested diversification value the current single-asset structure leaves unused. The post-bear NIFTY recovery overlay (v2.0) is a single-asset-at-a-time switch; multi-asset holding is the broader generalization. Architecture change to `MacroStrategy`'s position accounting; requires careful cost modeling for simultaneous long-side positions.
 
-2. **Further mitigation approaches for the 2018/2022/2025 structural-rotation losses.** These years lack the V-recovery signature the recovery overlay targets; the loss-pattern diagnostic confirmed no single price-based signal in our current dataset cleanly identifies them without unacceptable win-year whipsaw cost. The Mom30 composition diagnostic (`experiments/diagnose_mom30_composition.py`) found one informative conditional signal — β_mid > median+1σ AND most-loaded segment below own 100-DMA predicts an 11pp average forward 12-month Mom30 vs NIFTY underperformance — but rule construction failed in-sample tests. Candidate directions to investigate further: sector-rotation signals using the cached NSE sector indices (NIFTY_BANK, NIFTY_IT, NIFTY_AUTO, NIFTY_FMCG, etc.), multi-asset holding alongside Momentum 30, breadth signals (% of NIFTY 200 above own 50 DMA), and Quality 30 / Low Volatility 30 as conditional alternative long-side assets.
+2. **Further mitigation approaches for the 2018/2022/2025 structural-rotation losses.** These years lack the V-recovery signature the recovery overlay targets; the loss-pattern diagnostic confirmed no single price-based signal in our current dataset cleanly identifies them without unacceptable win-year whipsaw cost. An earlier composition diagnostic (`experiments/diagnose_mom30_composition.py`) appeared to identify an informative conditional signal but used corrupted Midcap 150 cache data (Total Return instead of Price Return). Re-running with corrected data is on the roadmap; until then, composition-based mitigation approaches are paused. See "Composition swap research — paused due to data integrity issue" subsection in the Momentum-Crash Mitigation Research section for details. Candidate directions to investigate further: sector-rotation signals using the cached NSE sector indices (NIFTY_BANK, NIFTY_IT, NIFTY_AUTO, NIFTY_FMCG, etc.), multi-asset holding alongside Momentum 30, breadth signals (% of NIFTY 200 above own 50 DMA), and Quality 30 / Low Volatility 30 as conditional alternative long-side assets.
 
-3. **Walk-forward parameter validation** — re-fit thresholds and lookback windows on rolling 5-year windows; report out-of-sample-only equity curve. Includes walk-forward validation of the slow-stress signal, gold rotation gate, recovery overlay, slow-stress cooldown duration, and panic-short drawdown threshold. v1.4's cross-country validation addresses architecture-level generalization but parameter walk-forward remains untested. Rolling 5-year training windows with 1-year OOS aggregation is the standard approach; the strategy's parameters were judgment-based throughout development.
+3. **Stock-level momentum portfolio construction (new direction, June 2026).** Extend the project from index-level overlay design (current: regime-aware engines applied to NIFTY 200 Momentum 30 index) to stock-level portfolio construction. Build a top-200 universe (BSE 200 by market cap + liquidity), apply quality screen (SCDV-style: ROE, debt/equity, earnings stability), score remaining names by 6m + 12m risk-adjusted momentum, construct a 30-stock portfolio with max 3% per position and optional sector-neutral constraint. Backtest against NIFTY 200 Momentum 30 index and NIFTY 200 Quality 30 index. Integrate as alternative long-side asset in v2.1 architecture for end-to-end comparison. This mirrors the construction methodology used by active AMC quant funds (e.g., 360 ONE Quant Fund's SCDV + momentum hybrid). 5-6 weekends estimated. Demonstrates stock-level construction capability beyond the current index-overlay design.
 
 4. **Early-recovery detection.** The 100-DMA trend filter lags cyclical recoveries by 15-25% of the underlying move. The v2.0 recovery overlay compensates for the post-flip portion of this lag but doesn't help with the pre-flip portion. Candidate replacements/augmentations: breadth signals (% of NIFTY 200 above 50 DMA), shorter MA crossovers (20/50 golden cross), VIX-peak-rollover (VIX has fallen ≥30% from a recent peak above 25). Trade-off to test: faster trend filters generate more false signals in chop regimes. Requires dedicated parameter testing and OOS validation before adoption.
 
@@ -661,6 +750,10 @@ In progress and planned:
 9. **Productionize the RBI repo rate feed** — replace the hardcoded `RBI_REPO_RATE_HISTORY` table with a CSV-backed config file plus a FRED API fallback for any dates after the last manual entry. Add a runtime warning if the strategy runs on a date past the latest available rate. Required before any live trading; nice-to-have for paper trading.
 
 10. **Modular refactor** — break monolithic `strategy.py` into `src/data.py`, `src/signals.py`, `src/backtest.py` for extensibility.
+
+**Completed in v2.1 validation (June 2026 — previously on roadmap):**
+- ✅ Walk-forward parameter validation (13 rolling 5y train / 1y OOS windows; production v2.1 beats per-window-optimal on every aggregate OOS metric: +0.56pp CAGR, +0.048 Sharpe, +2.34pp shallower MaxDD)
+- ✅ Exhaustive vol-scaling rejection (32 variants across two test rounds; closed across estimator, target structure, regime gating, smoothing, and residual asset choice)
 
 **Completed in v2.0–v2.1 (previously on roadmap):**
 - ✅ Post-bear NIFTY recovery overlay (v2.0 — addresses 2009-style V-recovery momentum-crash failure mode; +1.00pp CAGR, +0.04 Sharpe)

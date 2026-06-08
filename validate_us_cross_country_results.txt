@@ -1,6 +1,6 @@
 ==============================================================================================================
   US CROSS-COUNTRY VALIDATION — v1.4 SlowStressSignal architecture
-  Sample: 1995-01-01 → 2026-05-15  (7966 trading days)
+  Sample: 1995-01-01 → 2026-06-07  (7982 trading days)
 ==============================================================================================================
 
   Signal (US analogs of India inputs):
@@ -8,7 +8,7 @@
     VIX_stressed = (90d z > 1.5) AND (5d mom > 0)
     fires        = DXY_stressed AND VIX_stressed
 
-  Total fires:   306 (3.84% of days)
+  Total fires:   306 (3.83% of days)
   Total latches: 129
 
 ==============================================================================================================
