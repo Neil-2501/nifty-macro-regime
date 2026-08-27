@@ -1,12 +1,32 @@
 """
-Modular Macro Strategy Framework — Indian Markets (canonical, v2.1)
+Modular Macro Strategy Framework — Indian Markets (canonical, v2.2)
 
-Production config: Config 7 (v2.1) — Mom30 long-side + V2 post-bear-recovery
-NIFTY 50 hold + 5-day slow-stress lock + 15% drawdown gate on panic-short +
-momentum-gated gold rotation. Result: +16.75% CAGR post-tax, 0.841 Sharpe,
--12.78% MaxDD over 2008-2025 (₹1 → ₹17.26).
+Production config: Config 7 (v2.1 core) + defensive quality basket overlay
+(v2.2 addition, ON BY DEFAULT). Composition:
+  - Bull long-side asset: NIFTYMOM30 index
+  - Post-bear NIFTY 50 recovery window (V2 overlay)
+  - 5-day slow-stress cooldown
+  - 15% drawdown gate on panic-short
+  - Defensive quality basket on stress-flat days after 40-day persistence gate
+    (50% basket + 50% cash blend, 30 bps/side, STCG 15%/20%). REPLACES the
+    Config 7 G10 gold rotation on stress-flat days (see "superseded" note below).
 
-Six legacy configs (1-6) retained unchanged for comparison and backward compat:
+Superseded (kept as opt-in research code):
+  - v2.1 G10 momentum-gated gold rotation on stress-flat days. Replaced in v2.2
+    by the defensive quality basket. Gold code is retained in the combiner and
+    fires internally; its output is zeroed at the strategy layer when
+    enable_defensive_basket=True. Set enable_defensive_basket=False to
+    reproduce v2.1's gold rotation byte-for-byte.
+
+Canonical numbers (post-tax, 2008-04-01 → 2026-05-11, 2026 partial ~4.5 months;
+Sharpe = rf-adjusted using RBI repo rate):
+  Config 7 baseline (defensive OFF, gold ON):  16.52% CAGR / Sharpe 0.81 / MaxDD -12.78%
+  R1 production   (defensive ON, gold OFF):    16.85% CAGR / Sharpe 0.83 / MaxDD -13.92%
+  Defensive-basket delta:            +0.33pp CAGR, +0.02 Sharpe, -1.13pp MaxDD (FULL)
+                                     +0.15pp CAGR, +0.01 Sharpe, +1.90pp MaxDD (OOS 2017+)
+  Framing: marginal, ~Sharpe-neutral change; not a slam-dunk improvement.
+
+Seven configs (1-7) shipped for production / backward compat:
   Config 1 — no gold rotation (cash on every flat day, panic-short retained)
   Config 2 — gold throughout entire stress-flat latch (v1.1.1 production)
   Config 3 — gold replaces panic short (rotation instead of active short)
@@ -14,7 +34,16 @@ Six legacy configs (1-6) retained unchanged for comparison and backward compat:
   Config 5 — Config 4 + NIFTYMIDCAP150 long-side asset (v1.3)
   Config 6 — Config 4 + NIFTYMOM30 long-side asset (v1.5 production)
   Config 7 — Config 6 + V2 overlay + 5-day slow-stress lock +
-             15% drawdown gate on panic-short (v2.1 — production)
+             15% drawdown gate on panic-short (v2.1 core)
+
+v2.2 production = Config 7 + defensive quality basket overlay
+                  (enable_defensive_basket=True by default in MacroStrategy).
+  Set enable_defensive_basket=False to reproduce Config 7 baseline exactly.
+
+EXPERIMENTAL / INACTIVE — CompositionSwapOverlay (composition swap on Mom30 → NIFTY 50)
+was tested as v4/v5 research; on the corrected NIFTY Midcap 150 data no
+parameterization reliably beat Config 7. Code is retained but disabled by
+default (enable_composition_swap=False). NOT part of production.
 
 Key v2.1 changes vs v2.0:
   - Panic-short DD gate: panic-short fires only when NIFTY's drawdown from
@@ -235,6 +264,208 @@ class SlowStressWithLockSignal(SlowStressSignal):
                 if in_active_run:
                     in_active_run = False
         return pd.Series(out, index=raw.index, name=self.name)
+
+
+class CompositionSwapOverlay:
+    """v2.2 — symmetric composition-conditional Mom30 → NIFTY 50 swap overlay.
+
+    SYMMETRIC FRAMEWORK
+    For each cap segment X ∈ {mid, small}, the entry trigger fires when:
+        β_X > beta_threshold  AND  segment X < its own DMA-window MA
+    where β values come from a no-intercept rolling 60-day OLS:
+        Mom30_ret = β_large × NIFTY50_ret + β_mid × Midcap150_ret + β_small × Smallcap250_ret
+    (anchored at t−1 to prevent look-ahead).
+
+    β_large is structurally excluded — swapping NIFTY 50 into itself is meaningless.
+
+    HISTORICAL REALITY
+    Only the MID arm has ever fired. β_small never crosses 0.75 (max ever 0.619
+    in 2020) because Mom30 picks stocks from NIFTY 200, which excludes the
+    Smallcap 250 universe by definition. The SMALL arm is included for
+    completeness — it extends automatically if Mom30 ever drifts into
+    smallcap-tracked exposure.
+
+    ENTRY: ANY arm fires AND baseline is in long_mom_default state.
+    HOLD: full swap from Mom30 → NIFTY 50 on the long leg.
+    YIELD: baseline transitions out of long_mom_default → swap drops immediately
+    (slow-stress, panic-short, gold rotation, V2 overlay all take priority).
+    AND-EXIT: for each arm that fired at entry, β_X < threshold AND segment X
+    > DMA must hold for `persistence_days`, AND Mom30 `recovery_lookback`-day
+    return ≥ NIFTY 50 `recovery_lookback`-day return for the same window.
+    TIME CAP: `max_hold_days` (safety; has never bound historically).
+
+    Data requirements: NIFTYMOM30, ^NSEI, NIFTYMIDCAP150, NIFTYSMALLCAP250
+    must all be present in the data DataFrame. If any is missing, the overlay
+    returns an all-False signal and the strategy reverts to v2.1 behavior.
+    """
+
+    def __init__(self, beta_threshold=0.75, segment_dma=100,
+                 persistence_days=5, max_hold_days=252,
+                 recovery_lookback=60, window=60,
+                 betas_csv=None):
+        self.beta_threshold = beta_threshold
+        self.segment_dma = segment_dma
+        self.persistence_days = persistence_days
+        self.max_hold_days = max_hold_days
+        self.recovery_lookback = recovery_lookback
+        self.window = window
+        # If `betas_csv` is provided, load pre-computed β values from disk and
+        # use them instead of re-computing inline. Production usage points this
+        # at `data/composition_betas_unconstrained.csv` — which is generated by
+        # `experiments/composition_regression.py`. The inline regression path
+        # remains as a fallback when no CSV is provided; note that it depends
+        # on the exact price series loaded into `data` and can drift from the
+        # research-CSV path when Midcap/Smallcap data sources differ.
+        self.betas_csv = betas_csv
+        self._betas_cache = None
+        if betas_csv is not None:
+            try:
+                _df = pd.read_csv(betas_csv)
+                _df = _df.rename(columns={_df.columns[0]: "date"})
+                _df["date"] = pd.to_datetime(_df["date"])
+                _df = _df.set_index("date")
+                self._betas_cache = (_df["beta_mid"], _df["beta_small"])
+            except (FileNotFoundError, KeyError) as _e:
+                print(f"WARNING: composition betas CSV unreadable "
+                      f"({betas_csv}): {_e}. Falling back to inline regression.",
+                      file=sys.stderr)
+                self._betas_cache = None
+
+    def _rolling_betas(self, data):
+        """Resolve β_mid and β_small series, reindexed to data.index.
+
+        Preferred path: use pre-computed β values from `betas_csv` (matches
+        the research reference exactly, since the CSV was produced by the
+        canonical composition_regression.py with consistent data sources).
+
+        Fallback path: rolling no-intercept OLS computed inline from
+        Mom30 / NIFTY 50 / Midcap 150 / Smallcap 250 returns. Returns drift
+        from the CSV path when input price series differ in scale/base.
+        """
+        if self._betas_cache is not None:
+            bm_csv, bs_csv = self._betas_cache
+            return (bm_csv.reindex(data.index), bs_csv.reindex(data.index))
+
+        needed = ["NIFTYMOM30", "^NSEI", "NIFTYMIDCAP150", "NIFTYSMALLCAP250"]
+        if not all(c in data.columns for c in needed):
+            return None, None
+
+        def _native_returns(series):
+            price_changed = series != series.shift(1)
+            return series.pct_change().where(price_changed)
+
+        mom_ret = _native_returns(data["NIFTYMOM30"])
+        nif_ret = _native_returns(data["^NSEI"])
+        mid_ret = _native_returns(data["NIFTYMIDCAP150"])
+        sml_ret = _native_returns(data["NIFTYSMALLCAP250"])
+        df = pd.DataFrame({"mom": mom_ret, "large": nif_ret,
+                           "mid": mid_ret, "small": sml_ret}).dropna()
+        n = len(df)
+        bm = np.full(n, np.nan)
+        bs = np.full(n, np.nan)
+        y_arr = df["mom"].values
+        X_arr = df[["large", "mid", "small"]].values
+        w = self.window
+        for t in range(w, n):
+            y_w = y_arr[t - w:t]
+            X_w = X_arr[t - w:t]
+            try:
+                b, *_ = np.linalg.lstsq(X_w, y_w, rcond=None)
+                bm[t] = b[1]
+                bs[t] = b[2]
+            except np.linalg.LinAlgError:
+                continue
+        # β at index t is computed from y[t-w:t], X[t-w:t] — i.e., returns
+        # through t-1. Already anchored at t-1; no additional shift required.
+        bm_ser = pd.Series(bm, index=df.index, name="beta_mid").reindex(data.index)
+        bs_ser = pd.Series(bs, index=df.index, name="beta_small").reindex(data.index)
+        return bm_ser, bs_ser
+
+    def compute_swap_active(self, data, long_mom_default):
+        """State machine. Returns a boolean Series aligned to data.index — True
+        on days the long leg should hold NIFTY 50 instead of Mom30."""
+        idx = data.index
+        beta_mid, beta_small = self._rolling_betas(data)
+        if beta_mid is None:
+            return pd.Series(False, index=idx, name="composition_swap_active")
+
+        mid = data["NIFTYMIDCAP150"]
+        sml = data["NIFTYSMALLCAP250"]
+        mid_dma = mid.rolling(self.segment_dma, min_periods=50).mean()
+        sml_dma = sml.rolling(self.segment_dma, min_periods=50).mean()
+        # Match the v4 reference state machine: segment-weak flags use
+        # current-day close vs current-day DMA (no shift). The β series above
+        # is already t-1 anchored, which is the dominant look-ahead control.
+        mid_weak = (mid < mid_dma).fillna(False)
+        sml_weak = (sml < sml_dma).fillna(False)
+
+        mom_p = data["NIFTYMOM30"]
+        nif_p = data["^NSEI"]
+        mom_lb = mom_p / mom_p.shift(self.recovery_lookback) - 1.0
+        nif_lb = nif_p / nif_p.shift(self.recovery_lookback) - 1.0
+        recovery_ok = (mom_lb >= nif_lb).fillna(False)
+
+        n = len(idx)
+        swap = np.zeros(n, dtype=bool)
+        arr_bm = beta_mid.values
+        arr_bs = beta_small.values
+        arr_mw = mid_weak.values
+        arr_sw = sml_weak.values
+        arr_rec = recovery_ok.values
+        arr_blm = long_mom_default.reindex(idx, fill_value=False).astype(bool).values
+
+        is_active = False
+        entry_pos = None
+        entry_mid = False
+        entry_small = False
+        streak_ab = 0
+        streak_c = 0
+
+        for i in range(n):
+            bm_i, bs_i = arr_bm[i], arr_bs[i]
+            mw_i, sw_i = bool(arr_mw[i]), bool(arr_sw[i])
+            blm_i = bool(arr_blm[i])
+            recov_i = bool(arr_rec[i])
+
+            trig_mid = (not pd.isna(bm_i)) and bm_i > self.beta_threshold and mw_i
+            trig_small = (not pd.isna(bs_i)) and bs_i > self.beta_threshold and sw_i
+
+            if not is_active:
+                if (trig_mid or trig_small) and blm_i:
+                    is_active = True
+                    entry_pos = i
+                    entry_mid = trig_mid
+                    entry_small = trig_small
+                    streak_ab = 0
+                    streak_c = 0
+            else:
+                if not blm_i:
+                    is_active = False
+                    entry_pos = None
+                    entry_mid = entry_small = False
+                    streak_ab = streak_c = 0
+                else:
+                    # Per-arm clear: arm fired at entry → β below thresh AND segment above DMA
+                    mid_clear = (not entry_mid) or (
+                        (not pd.isna(bm_i)) and bm_i < self.beta_threshold and not mw_i)
+                    sml_clear = (not entry_small) or (
+                        (not pd.isna(bs_i)) and bs_i < self.beta_threshold and not sw_i)
+                    ab_ok = mid_clear and sml_clear
+                    streak_ab = streak_ab + 1 if ab_ok else 0
+                    streak_c = streak_c + 1 if recov_i else 0
+                    days_held = i - entry_pos
+                    and_exit = (streak_ab >= self.persistence_days
+                                and streak_c >= self.persistence_days)
+                    time_cap = days_held >= self.max_hold_days
+                    if and_exit or time_cap:
+                        is_active = False
+                        entry_pos = None
+                        entry_mid = entry_small = False
+                        streak_ab = streak_c = 0
+
+            swap[i] = is_active
+
+        return pd.Series(swap, index=idx, name="composition_swap_active")
 
 
 class RegimeFilter:
@@ -611,7 +842,16 @@ class MacroStrategy:
                  long_cost_bps=3,
                  apply_tax=True, tax_rate=0.15,
                  enable_v2=False, v2_dd_threshold=0.15, v2_days=60,
-                 v2_regime_window=100):
+                 v2_regime_window=100,
+                 enable_composition_swap=False,
+                 composition_beta_threshold=0.75,
+                 composition_segment_dma=100,
+                 composition_persistence_days=5,
+                 composition_max_hold_days=252,
+                 composition_recovery_lookback=60,
+                 composition_betas_csv=None,
+                 enable_defensive_basket=True,
+                 defensive_basket_overlay=None):
         self.combiner = combiner
         self.target = target          # ^NSEI — used for signals, regime filter, SHORT positions
         self.gold_target = gold_target
@@ -642,6 +882,28 @@ class MacroStrategy:
         self.v2_dd_threshold = v2_dd_threshold
         self.v2_days = v2_days
         self.v2_regime_window = v2_regime_window
+        # v2.2: composition swap overlay. When enable_composition_swap=True,
+        # on long_mom_default days where the symmetric composition signal fires
+        # (β_mid > threshold + Midcap weak, OR β_small > threshold + Smallcap weak),
+        # hold NIFTY 50 instead of long_target until conditions clear. V2 and
+        # other overlays take priority; composition swap only acts on days
+        # baseline would otherwise default to Mom30.
+        self.enable_composition_swap = enable_composition_swap
+        if enable_composition_swap:
+            self.composition_overlay = CompositionSwapOverlay(
+                beta_threshold=composition_beta_threshold,
+                segment_dma=composition_segment_dma,
+                persistence_days=composition_persistence_days,
+                max_hold_days=composition_max_hold_days,
+                recovery_lookback=composition_recovery_lookback,
+                betas_csv=composition_betas_csv)
+        else:
+            self.composition_overlay = None
+        # v2.2: defensive quality basket overlay — ON by default in production.
+        # Set enable_defensive_basket=False to reproduce Config 7 baseline exactly.
+        # Overlay is post-processing on strategy_return (see defensive_basket.py).
+        self.enable_defensive_basket = enable_defensive_basket
+        self._defensive_basket_overlay = defensive_basket_overlay
 
     def _compute_v2_active(self, data):
         """V2 overlay: returns Series of bool — True on days within an active
@@ -701,6 +963,16 @@ class MacroStrategy:
         # Mask out gold position when no data available (forced flat)
         gold_pos = gold_pos.where(gold_available, 0.0)
 
+        # v2.2: when the defensive quality basket is enabled, it REPLACES the
+        # stress-flat allocation (gold/cash blend of Config 7). Force gold_pos
+        # to 0 so gold rotation and defensive basket don't double-up on the
+        # same stress-flat latch. The G10 gold-rotation code path in the
+        # combiner still runs (positions computed above) — its output is just
+        # zeroed at the strategy layer. Set enable_defensive_basket=False to
+        # reproduce v2.1's gold-rotation behavior byte-for-byte.
+        if self.enable_defensive_basket:
+            gold_pos = pd.Series(0.0, index=gold_pos.index, name=gold_pos.name)
+
         # v2.0: V2 overlay — on LONG days inside a V2 window, hold NIFTY 50
         # instead of long_target. Otherwise behaves identically to v1.5.
         if self.enable_v2:
@@ -709,9 +981,21 @@ class MacroStrategy:
             v2_active = pd.Series(False, index=data.index)
 
         long_mask = (nifty_pos == 1.0)
-        # Split long into Mom30-bucket (non-V2) and NIFTY-bucket (V2-active)
-        w_long_mom = (long_mask & ~v2_active).astype(float)
-        w_long_nif = (long_mask &  v2_active).astype(float)
+        # Default split: Mom30-bucket on long-not-V2 days, NIFTY-bucket on V2-active days
+        long_mom_default = long_mask & ~v2_active
+        long_v2_active   = long_mask &  v2_active
+
+        # v2.2: composition swap overlay. On long_mom_default days where the
+        # symmetric composition signal fires, divert from Mom30 → NIFTY 50.
+        if self.enable_composition_swap and self.composition_overlay is not None:
+            composition_swap_active = self.composition_overlay.compute_swap_active(
+                data, long_mom_default)
+        else:
+            composition_swap_active = pd.Series(False, index=data.index)
+        swap_on_long_mom = composition_swap_active & long_mom_default
+
+        w_long_mom = (long_mom_default & ~swap_on_long_mom).astype(float)
+        w_long_nif = (long_v2_active | swap_on_long_mom).astype(float)
         w_short    = (nifty_pos == -1.0).astype(float)
 
         # Per-asset costs (count transitions in each weight separately)
@@ -752,12 +1036,32 @@ class MacroStrategy:
         else:
             strategy_returns = strategy_returns_pretax.rename("strategy_return")
 
+        # v2.2: defensive quality basket overlay — applied on stress-flat days
+        # after 40-day persistence gate. Disable by setting enable_defensive_basket=False.
+        defensive_basket_active = pd.Series(False, index=data.index, name="defensive_basket_active")
+        if self.enable_defensive_basket:
+            overlay = self._defensive_basket_overlay
+            if overlay is None:
+                from defensive_basket import DefensiveBasketOverlay
+                overlay = DefensiveBasketOverlay()
+                self._defensive_basket_overlay = overlay
+            strategy_returns_overlaid = overlay.apply(strategy_returns, nifty_pos)
+            # Track which days the overlay was active (for diagnostics)
+            _, day_in_latch, is_flat = overlay._identify_latches(nifty_pos)
+            defensive_basket_active = pd.Series(
+                is_flat & (day_in_latch > overlay.persistence_days),
+                index=data.index, name="defensive_basket_active")
+            strategy_returns = strategy_returns_overlaid.rename("strategy_return")
+
         results = pd.DataFrame({
             "nifty_return":            nifty_returns,
             "gold_return":             gold_returns,
             "nifty_position":          nifty_pos,
             "gold_position":           gold_pos,
             "v2_active":               v2_active,
+            "long_mom_default":        long_mom_default,
+            "composition_swap_active": composition_swap_active,
+            "defensive_basket_active": defensive_basket_active,
             "strategy_return":         strategy_returns,
             "strategy_return_pretax":  strategy_returns_pretax,
         })
@@ -930,17 +1234,22 @@ def main():
               file=sys.stderr)
 
     # v1.3: load NSE CSV data for higher-alpha index substitution
+    # v2.2: Smallcap 250 added — required by composition swap β regression
     try:
-        midcap150 = load_nse_index_csv("data/midcap150_history.csv", "NIFTYMIDCAP150")
-        mom30     = load_nse_index_csv("data/momentum30_history.csv", "NIFTYMOM30")
-        raw["NIFTYMIDCAP150"] = midcap150.reindex(raw.index).ffill()
-        raw["NIFTYMOM30"]     = mom30.reindex(raw.index).ffill()
-        print(f"NIFTYMIDCAP150 first valid: {raw['NIFTYMIDCAP150'].first_valid_index().date()}",
+        midcap150   = load_nse_index_csv("data/midcap150_history.csv", "NIFTYMIDCAP150")
+        mom30       = load_nse_index_csv("data/momentum30_history.csv", "NIFTYMOM30")
+        smallcap250 = load_nse_index_csv("data/smallcap250_history.csv", "NIFTYSMALLCAP250")
+        raw["NIFTYMIDCAP150"]   = midcap150.reindex(raw.index).ffill()
+        raw["NIFTYMOM30"]       = mom30.reindex(raw.index).ffill()
+        raw["NIFTYSMALLCAP250"] = smallcap250.reindex(raw.index).ffill()
+        print(f"NIFTYMIDCAP150 first valid:   {raw['NIFTYMIDCAP150'].first_valid_index().date()}",
               file=sys.stderr)
-        print(f"NIFTYMOM30 first valid:     {raw['NIFTYMOM30'].first_valid_index().date()}",
+        print(f"NIFTYMOM30 first valid:       {raw['NIFTYMOM30'].first_valid_index().date()}",
+              file=sys.stderr)
+        print(f"NIFTYSMALLCAP250 first valid: {raw['NIFTYSMALLCAP250'].first_valid_index().date()}",
               file=sys.stderr)
     except FileNotFoundError as e:
-        print(f"WARNING: NSE CSV missing — Configs 5/6 will be skipped. ({e})", file=sys.stderr)
+        print(f"WARNING: NSE CSV missing — Configs 5/6/7/8 may be affected. ({e})", file=sys.stderr)
 
     # v1.3: configs list with optional MacroStrategy kwargs as 3rd tuple element.
     # Configs 1-4 use defaults (long_target="^NSEI", long_cost_bps=3) — backward compatible.
@@ -962,6 +1271,10 @@ def main():
                           panic_short_dd_threshold=0.15),
             {"long_target": "NIFTYMOM30",     "long_cost_bps": 6,
              "enable_v2": True, "v2_dd_threshold": 0.15, "v2_days": 60}),
+        # NOTE: the composition swap overlay (CompositionSwapOverlay class)
+        # is implemented and available via enable_composition_swap=True, but
+        # no Config 8 is wired up because it does not beat Config 7 on the
+        # corrected NIFTY Midcap 150 data. Retain for future testing only.
     ]
 
     runs = []
