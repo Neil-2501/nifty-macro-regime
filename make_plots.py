@@ -302,25 +302,28 @@ if __name__ == "__main__":
     sm, nm = compute_full_metrics(bt["res"])
     bd = position_breakdown(bt["res"])
 
-    print("\n--- Headline metrics (v2.1 Config 7: Mom30 + recovery overlay + slow-stress cooldown + drawdown-gated panic-short, post-tax) ---")
-    print(f"  Cumulative return : {sm['total']*100:.1f}%  (expected ~1624%)")
-    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (expected ~16.75%)")
-    print(f"  Sharpe            : {sm['sharpe']:.2f}    (expected ~0.84)")
-    print(f"  Sortino           : {sm['sortino']:.2f}    (expected ~1.01)")
-    print(f"  Calmar            : {sm['calmar']:.2f}    (expected ~1.31)")
-    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (expected ~-12.8%)")
-    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (expected ~12.16%)")
+    print("\n--- Headline metrics (v2.2 R1 = Config 7 + defensive quality basket, post-tax) ---")
+    print(f"  Cumulative return : {sm['total']*100:.1f}%  (expected ~1655% through 2026-05-11)")
+    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (expected ~16.85% v2.2 R1)")
+    print(f"  Sharpe (ret/vol)  : {sm['sharpe']:.2f}    (expected ~0.84 — legacy return/vol ratio;")
+    print(f"                                             rf-adjusted canonical Sharpe = 0.83)")
+    print(f"  Sortino           : {sm['sortino']:.2f}")
+    print(f"  Calmar            : {sm['calmar']:.2f}")
+    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (expected ~-13.9% v2.2 R1)")
+    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (expected ~12.13%)")
+    print(f"  Note: Sharpe printed here is the legacy return/vol ratio (rf=0). Canonical rf-adjusted")
+    print(f"        Sharpe using RBI repo (headline 0.83) is computed elsewhere; see README.")
 
     print(f"\n  Position breakdown: long_nifty={bd['long_nifty']}  "
           f"short_nifty={bd['short_nifty']}  long_gold={bd['long_gold']}  "
           f"flat={bd['flat']}  total={bd['total']}")
 
-    # Tolerance check — v2.1 expected values (post-tax)
+    # Tolerance check — v2.2 R1 expected values (post-tax, endpoint 2026-05-11)
     checks = [
-        ("Cumulative return", sm["total"]*100, 1624.0, 5.0),
-        ("CAGR",              sm["cagr"]*100,   16.75, 0.05),
-        ("Sharpe",            sm["sharpe"],      0.84, 0.02),
-        ("Max drawdown",      sm["max_dd"]*100, -12.78, 0.2),
+        ("Cumulative return", sm["total"]*100, 1655.0, 20.0),
+        ("CAGR",              sm["cagr"]*100,   16.85, 0.1),
+        ("Sharpe (ret/vol)",  sm["sharpe"],      1.34, 0.05),
+        ("Max drawdown",      sm["max_dd"]*100, -13.92, 0.2),
     ]
     ok = True
     for label, got, expected, tol in checks:

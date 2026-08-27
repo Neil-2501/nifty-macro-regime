@@ -52,8 +52,13 @@ Key v2.1 changes vs v2.0:
     damage. Suppresses 2 historically false fires (2013-08-27 taper, 2022-02-24
     Ukraine reaction). Preserves all 4 of the 2008 GFC panic-shorts. Cost:
     2 of 16 COVID-2020 fires are suppressed at the early DD<15% stage, but
-    subsequent fires within the run still catch the move. Net effect:
+    subsequent fires within the run still catch the move. Net effect on
+    the v2.0 → v2.1 transition (measured through 2025-12-31 at the time,
+    return/vol-ratio convention used in the v2.1-era README):
     flat CAGR (-0.03pp), Sharpe 0.830 → 0.841, MaxDD -13.38% → -12.78%.
+    Under the v2.2 canonical rf-adjusted Sharpe convention (RBI repo rate)
+    and the extended endpoint (2026-05-11 partial), the corresponding v2.1
+    baseline reads 16.52% CAGR / Sharpe 0.81 / MaxDD -12.78% (see header).
 
 Key v2.0 changes vs v1.5:
   - V2 overlay: after each NIFTY bear→bull regime flip where the preceding
