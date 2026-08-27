@@ -1,6 +1,8 @@
 # Indian Equity Macro-Regime Strategy
 
-A systematic macro-regime strategy for Indian markets combining tactical long exposure to NIFTY 200 Momentum 30 in bull regimes, sustained-stress detection via INR weakness combined with India VIX z-score regime shift, momentum-gated gold rotation with multi-asset macro confirmation during identified stress windows, NIFTY 50 short exposure on panic-short fires gated by a 15% drawdown confirmation, and haircut-adjusted RBI repo-rate cash yield on idle capital. A 100-day moving-average trend filter on NIFTY 50 acts as the long-engagement gate; slow-stress and panic-short signals override engagement during identified macro stress regimes. After deep bear regimes, the strategy holds NIFTY 50 instead of NIFTY 200 Momentum 30 for the first 60 trading days of the recovery to capture the broad rebound that momentum baskets miss while still loaded with pre-crash defensives. A 5-day cooldown on the slow-stress signal prevents whipsaw flat→long→flat round-trips during noisy chop periods. The signal architecture has been validated on 31 years of US market data (9 of 9 documented stress events detected), addressing overfitting concerns from the limited 17-year Indian sample. Position sizing is binary across two assets (long-side index +1, gold +1, NIFTY 50 futures -1) with cash as the third state; no leverage beyond 1×.
+A systematic macro-regime strategy for Indian markets. Production config (**v2.2**) combines tactical long exposure to NIFTY 200 Momentum 30 in bull regimes, a defensive quality basket (18 fundamentally-screened low-beta names) during identified stress-flat windows blended 50/50 with cash, NIFTY 50 short exposure on panic-short fires gated by a 15% drawdown confirmation, and haircut-adjusted RBI repo-rate cash yield on remaining idle capital. A 100-day moving-average trend filter on NIFTY 50 acts as the long-engagement gate; slow-stress and panic-short signals override engagement during identified macro stress regimes. After deep bear regimes, the strategy holds NIFTY 50 instead of NIFTY 200 Momentum 30 for the first 60 trading days of the recovery to capture the broad rebound that momentum baskets miss while still loaded with pre-crash defensives. A 5-day cooldown on the slow-stress signal prevents whipsaw flat→long→flat round-trips during noisy chop periods. The signal architecture has been validated on 31 years of US market data (9 of 9 documented stress events detected), addressing overfitting concerns from the limited 18-year Indian sample.
+
+**v2.2 change vs v2.1**: the momentum-gated gold rotation (v1.4 through v2.1) on stress-flat days has been superseded by the defensive quality basket. Gold rotation code remains in the repository behind an opt-in flag (`enable_defensive_basket=False` restores v2.1 behavior byte-for-byte); see the [Superseded Research](#superseded-research--g10-gold-rotation) section for the honest reason.
 
 *Research project. Backtest results, methodology, and known limitations documented below. Not deployed; not investment advice.*
 
@@ -10,39 +12,54 @@ A systematic macro-regime strategy for Indian markets combining tactical long ex
 
 ## Headline Results
 
-Backtest period: **2008-04-01 to 2025-12-31** (17.7 years). Net results assume per-asset transaction costs of **3 bps per leg** on NIFTY 50 futures (short side), **6 bps per leg** on NIFTY 200 Momentum 30 ETFs (long side), and **5 bps per leg** on GOLDBEES.NS (gold ETF). Idle capital on fully-flat days earns the prevailing RBI repo rate minus a 100 bps haircut modeling realistic liquid-fund execution. **All metrics post-tax**: strategy uses Indian 15% short-term capital gains (annual-net model); NIFTY 50 buy-and-hold uses 10% long-term capital gains (zero turnover).
+Backtest period: **2008-04-01 to 2026-05-11** (18.1 years; 2026 is partial, ~4.5 months). Net results assume per-asset transaction costs of **3 bps per leg** on NIFTY 50 futures (short side), **6 bps per leg** on NIFTY 200 Momentum 30 ETFs (long side), and **30 bps per side** on the defensive quality basket (real institutional cost including STT, brokerage, exchange, GST, and slippage on mid-cap-heavy 18-name basket). Idle capital on fully-flat days earns the prevailing RBI repo rate minus a 100 bps haircut modeling realistic liquid-fund execution. **All metrics post-tax**: strategy uses Indian 15% short-term capital gains (annual-net model, with basket exits at 15% pre-2024-07-23 / 20% after); NIFTY 50 buy-and-hold uses 10% long-term capital gains (zero turnover).
 
-| Metric | Strategy (v2.1) | NIFTY Buy & Hold | Δ |
+**Sharpe convention**: **rf-adjusted** using the time-varying RBI repo rate (the same series used for the strategy's cash yield). Formula: `(mean(daily_return - daily_rf) × 252) / (std(daily_return) × √252)`. Average rf over the full window is 6.27%. A raw return/volatility ratio (unadjusted) is reported separately as a secondary metric where applicable; it is not called "Sharpe."
+
+| Metric | **R1 Production (v2.2)** | Config 7 baseline (v2.1) | NIFTY Buy & Hold |
 |---|---|---|---|
-| Sharpe (RF = 6%) | **0.84** | 0.20 | **+312%** |
-| Sortino | **1.01** | 0.17 | **+512%** |
-| Calmar | **1.31** | 0.16 | **+719%** |
-| Annualized volatility | 12.16% | 17.95% | -32% |
-| **Max drawdown** | **-12.78%** | **-51.72%** | **-75%** |
-| CAGR | **16.75%** | 8.37% | **+838 bps** |
-| Cumulative return | **1,623.6%** | 338.9% | +1,284.7pp |
+| **Max drawdown** | **-13.92%** | -12.78% | -51.72% |
+| CAGR | **16.85%** | 16.52% | 7.67% |
+| Sharpe (rf-adjusted) | **0.83** | 0.81 | 0.15 |
+| Annualized volatility | 12.13% | 12.07% | 17.95% |
+| Return/vol ratio (secondary) | 1.34 | 1.33 | 0.50 |
 
-All figures post-tax. The strategy's 15% short-term capital gains model reflects the realistic deployability case for an active rebalanced strategy (most gains qualify as short-term); NIFTY B&H's 10% long-term capital gains treatment is the conservative buy-and-hold benchmark (zero turnover, full long-term treatment). Pre-tax differences are smaller: pre-tax strategy CAGR is 19.93%, pre-tax NIFTY CAGR is 9.73%. The post-tax convention is the production-relevant headline.
+All three columns use the identical Sharpe convention: `(mean(daily_return - daily_rf) × 252) / (std(daily_return) × √252)`, `daily_rf = RBI repo / 252`.
 
-v2.1 cumulatively improves on v1.5 across every metric: CAGR 15.64% → 16.75% (+1.11pp), Sharpe 0.79 → 0.84 (+0.05), max drawdown −14.67% → −12.78% (+1.89pp shallower), Calmar 1.07 → 1.31. The improvement comes from three additions detailed under [Signal Logic](#signal-logic) and [Version History](#version-history): a post-bear NIFTY recovery overlay, a slow-stress cooldown, and a panic-short drawdown confirmation.
+**OOS 2017-01-01 → 2026-05-11:**
 
-The strategy generates risk-adjusted alpha vs passive NIFTY exposure through three independent mechanisms operating together: (1) tactical long exposure to a momentum-tilted equity portfolio — long NIFTY 200 Momentum 30 during bull regimes, flat or short NIFTY 50 during identified stress regimes; (2) momentum-gated safe-haven rotation — long gold during stress windows only when the multi-asset macro confirmation set is aligned, with mid-latch exit to cash if gold momentum turns negative; (3) cash management — idle capital earns the prevailing RBI repo rate minus a 100 bps haircut on fully-flat days, modeling realistic institutional liquid-fund execution. The 312% Sharpe improvement is the most direct measure of joint risk-adjusted skill across these mechanisms. Cumulative outperformance vs buy-and-hold (+1,285pp over 17.7 years, post-tax) is the geometric outcome of compounding all three together — the mechanisms cannot be cleanly separated into additive contributions, since they interact through the position sequence and the compounding base.
+| Metric | **R1 Production (v2.2)** | Config 7 baseline (v2.1) |
+|---|---|---|
+| Max drawdown | **-10.88%** | -12.78% |
+| CAGR | **16.10%** | 15.95% |
+| Sharpe (rf-adjusted) | **0.80** | 0.79 |
+
+**Honest framing**: the defensive-basket layer (v2.2) is a **marginal, ~Sharpe-neutral change** vs the Config 7 core, not a clean improvement:
+
+- **FULL 2008-2026**: ΔCAGR **+0.33pp**, ΔSharpe **+0.02**, ΔMaxDD **-1.13pp** (modestly deeper)
+- **OOS 2017-2026**: ΔCAGR **+0.15pp**, ΔSharpe **+0.01**, ΔMaxDD **+1.90pp** (shallower)
+
+The defensive basket adds ~30 bps of CAGR and +0.01–0.02 Sharpe. It slightly *deepens* full-history MaxDD (the basket has more volatility on active days than the Config-7 cash+gold alternative it replaces) but *shallows* OOS MaxDD (defensive names weathered the 2020 COVID and 2022 windows better than cash+gold). It is not the driver of the strategy's headline outperformance vs NIFTY; that comes from the Config 7 core (regime filter + Mom30 long + defensive engines). The basket earns its place on production as an incremental risk-adjustment layer, not as a source of significant new alpha.
+
+The current README convention is 15% short-term capital gains for the strategy (native tax model in `MacroStrategy.run()`) and 10% long-term capital gains for NIFTY buy-and-hold (buy-and-hold qualifies fully as long-term). Pre-tax numbers are ~3–4pp higher for the strategy and ~1.3pp higher for NIFTY; the post-tax convention is the production-relevant headline.
+
+The strategy generates risk-adjusted alpha vs passive NIFTY exposure through four mechanisms operating together: (1) tactical long exposure to a momentum-tilted equity portfolio — long NIFTY 200 Momentum 30 during bull regimes, flat or short NIFTY 50 during identified stress regimes; (2) defensive quality basket — a fundamentally-screened 18-name portfolio deployed on stress-flat days beyond a 40-day persistence gate, blended 50/50 with cash (v2.2, replaces the v2.1 gold rotation); (3) post-bear NIFTY 50 recovery overlay — swaps Mom30 → NIFTY 50 for 60 days after deep-bear regime flips; (4) cash management — idle capital earns the prevailing RBI repo rate minus a 100 bps haircut on fully-flat days. Cumulative outperformance vs buy-and-hold is the geometric outcome of compounding all four together; mechanisms cannot be cleanly separated into additive contributions, since they interact through the position sequence and the compounding base.
 
 ---
 
 ## Mechanisms of Outperformance
 
-The strategy's outperformance derives from three mechanisms that compound together over the 17.7-year sample. Their contributions are inherently joint and cannot be cleanly attributed to additive percentages, since each mechanism affects the compounding base for the others.
+The strategy's outperformance derives from four mechanisms that compound together over the 18.1-year sample. Their contributions are inherently joint and cannot be cleanly attributed to additive percentages, since each mechanism affects the compounding base for the others. The defensive-basket layer (v2.2) is the most recent and smallest of the four — its incremental contribution over Config 7 is +0.33pp CAGR / +0.02 Sharpe (FULL) and +0.15pp / +0.01 (OOS), not a first-order driver.
 
-**Tactical long exposure to a momentum-tilted equity portfolio.** The strategy holds long exposure to NIFTY 200 Momentum 30 by default during bull regimes (NIFTY 50 above its 100-day moving average), with slow-stress and panic-short overrides interrupting that exposure during identified macro stress. Capital avoidance of left-tail equity returns — the days where stress overrides force flat or short — generates volatility-drag alpha vs buy-and-hold. The strategy is long the long-side index ~65% of trading days (calm bull regimes), flat ~34% (bear regimes and stress flats), short NIFTY 50 ~0.7% (panic-short windows that survive the drawdown confirmation gate), and long gold ~0.5% (stress-flat windows where the gold rotation gate is satisfied). When long, the strategy holds **NIFTY 200 Momentum 30** by default — a 30-stock factor-tilted portfolio drawn from the NIFTY 200 universe and ranked semi-annually by 6-month and 12-month price momentum — except during the first 60 trading days following a deep-bear recovery, when it holds NIFTY 50 instead (see Refinements). Short exposure during panic-shorts remains on NIFTY 50 (more liquid for futures-based shorting). This is the core mechanism; the others amplify it.
+**Tactical long exposure to a momentum-tilted equity portfolio.** The strategy holds long exposure to NIFTY 200 Momentum 30 by default during bull regimes (NIFTY 50 above its 100-day moving average), with slow-stress and panic-short overrides interrupting that exposure during identified macro stress. Capital avoidance of left-tail equity returns — the days where stress overrides force flat or short — generates volatility-drag alpha vs buy-and-hold. The strategy is long the long-side index ~65% of trading days (calm bull regimes), flat ~34% (bear regimes and stress flats), short NIFTY 50 ~0.7% (panic-short windows that survive the drawdown confirmation gate). When long, the strategy holds **NIFTY 200 Momentum 30** by default — a 30-stock factor-tilted portfolio drawn from the NIFTY 200 universe and ranked semi-annually by 6-month and 12-month price momentum — except during the first 60 trading days following a deep-bear recovery, when it holds NIFTY 50 instead (see Refinements). Short exposure during panic-shorts remains on NIFTY 50 (more liquid for futures-based shorting). This is the core mechanism; the others amplify it.
 
-**Momentum-gated safe-haven rotation with macro confirmation.** During identified stress-flat windows, capital rotates to GOLDBEES.NS gated by three macro conditions: gold's 10-day return must be positive but capped at 10% (preventing blow-off-top entries), INR must have weakened by 0.5%+ over 10 days (confirming macro stress that mechanically supports INR-priced gold), and US 10-year Treasury yields must be falling over 20 days (gold's fundamental macro tailwind). The macro-confirmed gate replaces the v1.2-v1.3.1 single-condition gate (gold_10d > 0) which let in marginal-momentum entries (40% hit rate) and extreme-momentum entries (blow-off tops). v1.4 holds gold approximately 31 days across the sample, down from v1.3's 41 days; the additional macro confirmation requirements filter out marginal entries while preserving the legitimate flight-to-safety opportunities. One-way door exit logic is preserved: once in gold within a latch, exit to cash if 10-day return turns negative and stay out for the remainder of that latch.
+**Defensive quality basket on stress-flat days (v2.2).** Once the strategy has been in a stress-flat latch for 40 consecutive trading days (the persistence gate), the flat-day return is replaced with a 50/50 blend of the defensive quality basket and cash. The basket is 18 equal-weighted names selected semi-annually from the top-200 liquid NSE universe, filtered by fundamental hard rules (cfo > 0, net profit > 0, D/E ≤ 3), quality percentile ≥ 0.60, 250-day beta ≤ 0.85, and 250-day annualized vol ≤ 0.30, with a defensive-sector tilt bonus (FMCG, Pharma, Utility, IT) and a sector cap of 5. Real trading costs (30 bps/side + STCG 15%/20%) are charged at entry, exit, and STCG on any realized cumulative gain over the deployment window. Deploys ~368 trading days across the 18-year sample (only in genuinely-sustained stress windows). See [Defensive Quality Basket](#defensive-quality-basket-v22) for full construction and bake-off history. **Replaces** the v2.1 G10 gold rotation — kept in the codebase as opt-in via `enable_defensive_basket=False`.
 
-**Cash yield on idle capital (with realistic haircut).** On fully-flat days where neither NIFTY nor gold is held, the strategy credits the prevailing RBI repo rate minus a 100 bps haircut. The haircut models real-world liquid-fund execution: instrument spread (~50 bps inside repo), TER (~10–25 bps), and small auto-sweep frictions. Returns are post-tax throughout (15% on net annual gains, Indian short-term capital gains convention); sensitivity to the haircut size is documented under Backtest Caveats.
+**Cash yield on idle capital (with realistic haircut).** On fully-flat days where the defensive basket is not yet deployed (first 40 days of every stress latch) OR the basket half of the 50/50 blend on active days, the strategy credits the prevailing RBI repo rate minus a 100 bps haircut. The haircut models real-world liquid-fund execution: instrument spread (~50 bps inside repo), TER (~10–25 bps), and small auto-sweep frictions. Returns are post-tax throughout (15% on net annual gains, Indian short-term capital gains convention); sensitivity to the haircut size is documented under Backtest Caveats.
 
 ### Refinements added since v1.5
 
-Three targeted refinements were added to the v1.5 production base, each addressing a documented failure mode. Each is detailed under [Signal Logic](#signal-logic); their cumulative impact takes the strategy from v1.5 to v2.1 (post-tax CAGR 15.64% → 16.75%, Sharpe 0.79 → 0.84, max drawdown −14.67% → −12.78%).
+Four targeted refinements have been added since v1.5; each addresses a documented failure mode. Each is detailed under [Signal Logic](#signal-logic); the cumulative impact takes the strategy from v1.5 through v2.1 to v2.2 (post-tax CAGR 15.64% → 16.52% (v2.1) → 16.85% (v2.2), rf-adjusted Sharpe 0.79 → 0.81 → 0.83, max drawdown −14.67% → −12.78% → −13.92%).
 
 **Post-bear NIFTY recovery overlay.** When a bear regime ends and the strategy re-engages long after a NIFTY drawdown of 15% or more, hold NIFTY 50 instead of NIFTY 200 Momentum 30 for the next 60 trading days, then revert to Momentum 30. Targets the Daniel & Moskowitz (2016) momentum-crash pattern observed cleanly in the 2009 sample, where Momentum 30 held stale pre-crash defensives while the recovery was led by beaten-down cyclicals.
 
@@ -50,9 +67,11 @@ Three targeted refinements were added to the v1.5 production base, each addressi
 
 **Panic-short drawdown confirmation.** Panic-short can only fire when NIFTY's current drawdown from its trailing 60-day high exceeds 15%. All other panic-short conditions (high absolute VIX, accelerating VIX spike, NIFTY below 100-DMA) still required. Targets two documented false-fire incidents (2013-08-27 taper-reaction short and 2022-02-24 Ukraine-reaction short) where panic-short fired into local bottoms and lost ~22.9pp and ~12.0pp respectively.
 
+**Defensive quality basket on stress-flat days (v2.2, replaces G10 gold rotation).** After the strategy has been in a stress-flat latch for 40 consecutive trading days, deploy a fundamentally-screened 18-name low-beta basket blended 50/50 with cash. Real costs (30 bps/side, STCG 15%/20%) charged. Basket construction, persistence-gate sensitivity, and 50/50 blend rationale are documented in the [Defensive Quality Basket](#defensive-quality-basket-v22) section. The v2.1 G10 gold rotation code is retained in the repo behind `enable_defensive_basket=False`. See [Superseded Research](#superseded-research--g10-gold-rotation) for why gold rotation was replaced.
+
 **Cross-country signal architecture validation.** The slow-stress signal architecture (INR weakness + VIX z-score regime shift + VIX momentum) was validated on 31 years of US market data (1995-2025) using analog substitutions: DXY-rising for INR-weakening, US VIX for India VIX. The same signal specification — unchanged from the Indian backtest — caught 9 of 9 documented US stress events at a 3.83% overall fire rate with low false positive rates in calm bull years (0.0-7.5%). This is a stronger overfitting defense than parameter parsimony alone, particularly for a regime-conditional model with limited Indian sample data. See [Cross-Country Validation](#cross-country-validation) section below.
 
-**The Sharpe improvement (+312% post-tax vs NIFTY) is the most reliable single measure of risk-adjusted skill** because it normalizes return per unit of volatility regardless of which mechanism is doing the work on any given day. Cumulative return improvement (+1,285pp post-tax) is striking but is inherently joint and path-dependent.
+**Sharpe as the primary risk-adjusted metric.** The rf-adjusted Sharpe (using RBI repo rate, avg 6.27%) normalizes return per unit of volatility regardless of which mechanism is doing the work on any given day. The strategy's Sharpe of 0.83 vs NIFTY buy-and-hold's 0.15 (a ~5.5× improvement) is more reliable than cumulative-return comparisons, which are inherently joint and path-dependent.
 
 ---
 
@@ -138,7 +157,8 @@ The production strategy emerged from a sequence of explicit ablation tests acros
 | v1.4: prior + slow-stress signal + macro-confirmed gold rotation gate | Selected (v1.4) | Slow-stress catches the 2013 taper-tantrum failure mode (+3.43pp); macro-confirmed gate prevents the 2026 H1 gold blow-off-top failure; cross-country validation on US data catches 9/9 stress events |
 | v1.5: prior + bear-regime requirement on gold rotation entry + mid-latch bull-flip exit | Selected (v1.5) | Eliminates the 2019 gold-in-bull anomaly (3 days, −4.34pp) where gold rotation triggered against a recovering equity tape; v1.5 post-tax MaxDD −14.67% |
 | v2.0: prior + post-bear NIFTY recovery overlay + slow-stress cooldown | Selected (v2.0) | Recovery overlay captures the V-recovery cyclicals lead that Momentum 30 misses (cleanly visible in 2009: NIFTY +56% during the 60-day recovery window, Momentum 30 +29% — strategy now holds NIFTY through it). Slow-stress cooldown eliminates the 2019 April-May whipsaw (9 separate fires in short clusters were causing flat→long→flat round-trips). Combined: +1.14pp CAGR, max DD narrows from −14.67% to −13.38% |
-| **v2.1: prior + 15% drawdown confirmation on panic-short** | **Selected (v2.1, current production)** | Panic-short can only fire when NIFTY drawdown from 60-day high exceeds 15%; suppresses the 2013-08-27 (−22.9pp) and 2022-02-24 (−12.0pp) false fires that fired into local bottoms. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6 2020 fire is suppressed at 11.1% drawdown; next fire on March 9 catches up at 15.5% drawdown, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. MaxDD narrows further from −13.38% to −12.78%, Sharpe 0.83 → 0.84 |
+| v2.1: prior + 15% drawdown confirmation on panic-short | Selected (v2.1) | Panic-short can only fire when NIFTY drawdown from 60-day high exceeds 15%; suppresses the 2013-08-27 (−22.9pp) and 2022-02-24 (−12.0pp) false fires that fired into local bottoms. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6 2020 fire is suppressed at 11.1% drawdown; next fire on March 9 catches up at 15.5% drawdown, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. MaxDD narrows further from −13.38% to −12.78%, rf-adjusted Sharpe 0.79 → 0.81 |
+| **v2.2: prior + defensive quality basket replaces G10 gold rotation on stress-flat days** | **Selected (v2.2, current production)** | Defensive basket = 18 fundamentally-screened low-beta names (quality percentile ≥ 0.60, hard rules cfo>0/np>0/D/E≤3, beta ≤ 0.85, vol ≤ 0.30, defensive-sector tilt, sector cap 5), semi-annual rebalance, 50/50 blended with cash, deployed after 40-day persistence gate on each stress-flat latch. Real costs (30 bps/side + STCG 15%/20%) charged. Replaces the v2.1 G10 gold rotation (kept as opt-in via `enable_defensive_basket=False`). Marginal Sharpe-neutral improvement: CAGR 16.52% → 16.85% (+0.33pp), Sharpe 0.81 → 0.83 (+0.02), MaxDD -12.78% → -13.92% (slightly deeper). OOS 2017+: +0.15pp CAGR, +0.01 Sharpe, MaxDD -12.78% → -10.88% (1.9pp shallower). Not a slam-dunk; earns its place as an incremental risk-adjustment layer, not as significant new alpha. |
 
 The methodology throughout was ablation-and-replacement: each new component was layered on top of the previously-selected production base, with the prior version retained in the codebase as an opt-in rollback flag. Configurations are evaluated on the joint criterion of risk-adjusted return (Sharpe, Calmar) and absolute drawdown control. The discipline applied to each new layer was identical: pre-specify the parameter sweep before running, identify a plateau in the qualified range rather than a sharp cliff, disqualify variants that break key validation periods (notably the 2008 GFC and 2020 COVID stress windows for the panic-short gate).
 
@@ -209,9 +229,13 @@ When fired, position is forced to −1 (active short on NIFTY 50). Panic-short o
 
 **Documented tradeoff.** The March 6, 2020 panic-short fire occurred when NIFTY drawdown was only ~11.1% from the late-January high. Under v2.1 this fire is suppressed. The next panic-short fire on March 9 (drawdown 15.5%) catches the move three trading days later. 2020 CAGR drops from +52.21% to +46.25% — a meaningful 5.96pp give-back. The COVID protection is still strongly captured overall (the strategy beats NIFTY by +32.4pp post-tax in 2020), but the suppressed-then-caught pattern is the explicit cost of demanding price confirmation before shorting in fast-crash scenarios. If a future crisis develops faster than COVID and the early-fire suppression delays defense materially, this tradeoff would compound. The qualified-plateau evidence suggests this is the right tradeoff on the available sample, but it remains a risk inherent to the gate.
 
-### 4. Gold Rotation — Macro-Confirmed Gate (v1.4, with v1.5 bear requirement)
+### 4. Gold Rotation — Macro-Confirmed Gate (v1.4, SUPERSEDED in v2.2)
 
-**Economic rationale.** Gold's price action is driven by three fundamental macro factors: real interest rates (gold is a non-yielding asset, so falling real rates raise gold's relative appeal), dollar dynamics (gold is denominated in USD; weaker dollar lifts gold prices), and momentum / flight-to-safety flows. The macro-confirmed gold rotation gate uses one of each of these forces as entry confirmation, replacing the single-condition gate used in v1.2-v1.3.1.
+**Status.** SUPERSEDED as of v2.2 by the defensive quality basket (see [Section 6](#6-defensive-quality-basket-v22)). The gold-rotation code path remains in the repository behind `enable_defensive_basket=False` for backward compatibility and reproducibility of v2.1 numbers. Not part of production. Full context in [Superseded Research](#superseded-research--g10-gold-rotation).
+
+The section below documents the v1.4–v2.1 mechanism as it stood before v2.2 replaced it. Kept because it's part of the strategy's evolution and remains a valid opt-in configuration.
+
+**Economic rationale (v1.4–v2.1).** Gold's price action is driven by three fundamental macro factors: real interest rates (gold is a non-yielding asset, so falling real rates raise gold's relative appeal), dollar dynamics (gold is denominated in USD; weaker dollar lifts gold prices), and momentum / flight-to-safety flows. The macro-confirmed gold rotation gate uses one of each of these forces as entry confirmation, replacing the single-condition gate used in v1.2-v1.3.1.
 
 **Mechanics — entry requires ALL of:**
 - 0 < gold 10-day return ≤ 10% (positive momentum but not extreme; the cap prevents blow-off-top entries that historically reverse within days)
@@ -223,6 +247,8 @@ One-way door exit logic preserved from v1.2: once in gold within a stress-flat l
 
 **Why v1.4 changed the gate.** The v1.2-v1.3.1 single-condition gate (gold_10d > 0) had two documented failure modes. Marginal-momentum entries (gold 10d return 0-2%) had a 40% hit rate and mean return of −0.42% — essentially noise. Extreme-momentum entries (gold 10d return > 10%) exhibited blow-off-top behavior, with the 2026-01-29 entry at +24% gold momentum followed by a −19% gold crash within days. The v1.4 macro-confirmed gate addresses both: the upper cap blocks blow-off entries; the INR + US 10Y confirmation filters the marginal-momentum noise by requiring macro alignment.
 
+**Why v2.2 replaced this.** The G10 gate was over-restrictive — it fired on only ~27 stress-flat days across the 18-year sample, providing negligible incremental alpha in aggregate. The defensive quality basket bake-off (V7 native) showed a cleaner, better-tested replacement (see [Defensive Quality Basket](#6-defensive-quality-basket-v22)). We built the gate, tested it, and replaced it with something we trust more.
+
 ### 5. Post-Bear NIFTY Recovery Overlay (v2.0)
 
 **Economic rationale.** Documented by Daniel & Moskowitz (2016, *Momentum Crashes*): after a sharp market crash, a momentum index holds stale pre-crash winners (defensive stocks that survived the crash) while the recovery is led by beaten-down cyclicals. Because NIFTY 200 Momentum 30's momentum score is computed over trailing 6- and 12-month windows and rebalances only semi-annually (June and December), the index cannot refresh into the recovery leaders until a full rebalance cycle after the bottom. NIFTY 50 captures the broad-market rebound that Momentum 30 misses during the first 2–3 months after the trough.
@@ -233,9 +259,75 @@ The 2009 sample illustrates this cleanly. NIFTY's bear regime ended on March 23,
 
 **Drawdown-threshold sensitivity.** Tested at 10%, 12%, 15%, 18%, 20%. The 15%, 18%, and 20% thresholds produce identical results — no qualifying bear drawdowns in the 15–20% range across the sample. 12% added marginal false positives (shallow pullbacks that don't constitute real bear markets). 10% over-triggered. The 15% threshold is the smallest value that captures all real V-recoveries (2008 GFC, 2020 COVID) without including borderline cases; the plateau from 15% to 20% means the choice is robust to the specific threshold within that range.
 
-**Hold-period choice.** 60 trading days reflects the typical Indian semi-annual rebalance cadence (NSE Indices rebalances momentum semi-annually). Not separately swept. Impact: +1.00pp CAGR vs v1.5 baseline, +0.04 Sharpe, max drawdown unchanged. The overlay is active only during ~180 days out of the 17.7-year sample (qualifying V-recovery windows), so it does not affect the strategy outside those specific periods.
+**Hold-period choice.** 60 trading days reflects the typical Indian semi-annual rebalance cadence (NSE Indices rebalances momentum semi-annually). Not separately swept. Impact: +1.00pp CAGR vs v1.5 baseline, +0.04 Sharpe, max drawdown unchanged. The overlay is active only during ~180 days out of the ~18-year sample (qualifying V-recovery windows), so it does not affect the strategy outside those specific periods.
 
-### 6. Tested But Not Adopted
+### 6. Defensive Quality Basket (v2.2)
+
+**Status.** Production, replaces the v2.1 G10 gold rotation on stress-flat days. Enabled by default in `MacroStrategy(..., enable_defensive_basket=True)`. Set to False to reproduce v2.1 gold-rotation behavior byte-for-byte.
+
+**Economic rationale.** During sustained stress-flat windows, capital that would otherwise sit in cash can be deployed into a diversified basket of high-quality, low-beta names that historically outperform cash on a total-return basis while adding limited additional drawdown. This is a "defensive equity" allocation — not a return-seeking momentum tilt, but a risk-managed harvest of the equity risk premium during periods when the strategy's main long-side asset (Mom30) is disengaged by the regime filter.
+
+**Construction (semi-annual rebalance).** At each rebalance date:
+
+1. **Universe filter**: top-200 NSE names by 60-day rupee turnover (real liquidity floor).
+2. **Fundamental hard rules** (point-in-time, 6-month reporting lag): `cfo > 0`, `net_profit > 0`, `total_debt / equity ≤ 3` (default 3.0; the defensive basket used 3.0 in production, not 2.0 which was tested for the momentum-basket variants). Names failing any explicit rule are dropped; names with missing data in a specific field are permissive-passed but names missing from the fundamentals panel entirely are dropped.
+3. **Quality percentile ≥ 0.60**: derived from a combined Piotroski F-score + ratio-composite (ROCE, D/E, interest coverage, cash conversion) cross-sectional percentile within the universe.
+4. **Risk caps**: 250-day beta ≤ 0.85 vs NIFTY 50, 250-day annualized vol ≤ 0.30. Filters out high-beta cyclicals and volatile mid/small caps.
+5. **Composite score**: `z(quality_pct) − z(beta) − z(vol) + 0.5 × 1[defensive sector]` where defensive sectors are FMCG, Pharma, Utility, IT.
+6. **Sector cap**: max 5 names per sector. Sort by composite score desc, then apply cap greedily.
+7. Take top 18 names, equal-weighted (1/18 = 5.56% per name).
+8. **Buffered incumbent retention**: incumbents from the prior rebalance are retained if they still rank in the top-50% of the current composite score (reduces churn).
+
+Sample basket at 2020-06-30 (mid-COVID stress window): ITC, BRITANNIA, HINDUNILVR, SUNPHARMA, HDFCLIFE, and 13 more. Concentrated in FMCG + Pharma + Financials + IT — as designed.
+
+**Persistence gate (N = 40 trading days).** The basket does not deploy immediately on stress-flat days. It waits 40 consecutive trading days of `nifty_position == 0` before deploying, then remains active until the latch ends. This filters out short (< 40-day) stress flickers — ~102 of the 119 stress-flat latches across the sample never qualify — and only deploys during the ~17 genuinely sustained bear windows. Tuning: N ∈ {10, 20, 30, 40, 50, 60} tested in-sample 2008-2016, N=40 was OOS-best Sharpe among basket_cash_blend variants. Locked, applied unchanged to OOS 2017-2026.
+
+**50/50 basket/cash blend.** On active days, the flat-day return is replaced with:
+`ret = 0.5 × basket_ret + 0.5 × cash_return`
+
+100% basket (no cash blend) tested — higher CAGR but MaxDD blowout too deep for the risk-adjusted improvement to survive. 50/50 was the best-Sharpe alloc across {100%, 75%, 50%, 25%} tested at N=40.
+
+**Trading costs and tax.** Real institutional costs are charged:
+- Entry (day 41 of a qualifying latch): 15 bps of NAV (0.5 alloc × 30 bps/side)
+- Exit (regime flip to bull): 15 bps of NAV + STCG on cumulative basket gain over the deployment window
+- STCG rate: 15% pre-2024-07-23, 20% after (India, short-term capital gains — basket is always held under 1 year)
+- No internal rebalance cost inside a deployment (holdings only change at the semi-annual rebalance dates, which almost never fall inside an active deployment window in practice; when they do, the incremental turnover cost is negligible)
+
+The 30 bps/side cost model covers brokerage (~2 bps), STT (~10 bps), exchange charges (~1 bp), stamp duty (~1 bp), GST (~2 bps on brokerage), and slippage (~14 bps) on the 18-name basket. Slippage estimate reflects realistic execution on mid-cap-heavy names within the top-200 liquid universe.
+
+**Bake-off results (V7 native, defensive-side allocation).** Six candidates tested for the stress-flat allocation, all applied to Config 7 with identical regime signals:
+
+| # | Candidate | FULL CAGR | Sharpe | MaxDD | Deployments |
+|---|---|---|---|---|---|
+| 0 | Config 7 baseline (G10 gold) | 16.52% | 0.81 | -12.78% | – |
+| 1 | Pure cash (no rotation) | ~16.33% | ~0.80 | -12.78% | 119 |
+| 2 | Simple gold (bear-regime, no G10 conditions) | ~16.02% | ~0.75 | -23.21% | 119 |
+| 3 | G10 incumbent (= baseline) | 16.52% | 0.81 | -12.78% | 0 |
+| 4 | Basket-gated 100% (N=40) | ~17.20% | 0.82 | -17.00% | 17 |
+| **5** | **Basket + cash 50/50 (N=40) — SELECTED** | **16.85%** | **0.83** | **-13.92%** | **17** |
+| 6 | Basket + gold 50/50 (N=40) | ~16.71% | 0.78 | -23.08% | 17 |
+
+Candidate 5 (basket + cash 50/50, N=40) has the best Sharpe and modest MaxDD deepening (~1pp vs baseline). Selected as v2.2 production. Candidate 4 (100% basket) has higher CAGR but ~5pp deeper MaxDD.
+
+**V8 stress-resilient basket bake-off (rejected).** A more sophisticated basket construction — ranking by mean return across prior bear windows only (no look-ahead), balanced beta band 0.6–1.1, fewer defensive-sector picks — was tested. It underperformed the V7 generic construction across FULL and OOS. Reason: bear-window resilience does not transfer across regimes (2008 defenders ≠ 2020 defenders ≠ 2022 defenders), and 11.9% of picks used inverse-vol fallback anyway when history was thin. V7 basket_cash_blend retained.
+
+**Bake-off scripts:** `experiments/stock_momentum/backtest_bakeoff_v7_native.py` (V7), `backtest_bakeoff_v8.py` (V8 rejected).
+
+**Data dependencies for basket construction (needed if rebuilding artifacts):**
+- `data/bse_pipeline/extended_fundamentals_v2.parquet` — fundamentals panel (bundled)
+- `data/quality_factor/quality_scores_pit.parquet` — quality scores (bundled)
+- `data/momentum_scores/scored_universe.parquet` — universe + turnover (bundled)
+- `data/yfinance_bulk/adjusted_prices_panel.parquet` — stock price panel for beta/vol computation (~544 MB; NOT bundled — regenerate via `fetch_stock_prices.py` or equivalent yfinance bulk download)
+
+**Runtime artifacts (bundled, small):**
+- `data/defensive_basket_holdings.parquet` — 340 rows (holdings × rebalance date)
+- `data/defensive_basket_daily_returns.parquet` — 4,749 rows (one basket return per trading day)
+
+The runtime only needs the two small artifacts. The larger source data is only needed to rebuild the artifacts via `python build_defensive_basket.py`.
+
+**Data documentation for the fundamentals + quality pipeline is in the [Data](#data) section.**
+
+### 7. Tested But Not Adopted
 
 #### Long-entry confirmation lanes (USDINR / India VIX momentum)
 
@@ -305,24 +397,58 @@ Key methodological lessons: upper momentum cap is essential for blow-off-top pro
 
 ## Data
 
+### Market data (macro signals + benchmarks)
+
 | Series | Ticker | Source | Frequency |
 |---|---|---|---|
 | NIFTY 50 | `^NSEI` | Yahoo Finance via `yfinance` | Daily, adjusted close |
 | USD/INR | `INR=X` | Yahoo Finance | Daily |
 | India VIX | `^INDIAVIX` | Yahoo Finance | Daily |
 | WTI Crude (front-month) | `CL=F` | Yahoo Finance | Daily |
-| Gold ETF (v1.1) | `GOLDBEES.NS` | Yahoo Finance (NSE-listed) | Daily; series begins 2009-01-02 |
+| Gold ETF (v1.1, opt-in v2.2) | `GOLDBEES.NS` | Yahoo Finance (NSE-listed) | Daily; series begins 2009-01-02 |
 | NIFTY 200 Momentum 30 (v1.3) | `NIFTYMOM30` | NSE CSV via `niftyindices.com` (pulled with `nselib`); stored as `data/momentum30_history.csv` | Daily; backfilled 2008-01-01, live since Aug 2020 |
-| US 10-Year Treasury yield (v1.4) | `^TNX` | Yahoo Finance | Daily |
-| RBI Repo Rate (v1.1) | — | RBI MPC press releases ([rbi.org.in](https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx)); hardcoded as `RBI_REPO_RATE_HISTORY` in `strategy.py` | Step function (53 announcements over 2008–2025) |
+| US 10-Year Treasury yield (v1.4, opt-in v2.2) | `^TNX` | Yahoo Finance | Daily |
+| RBI Repo Rate (v1.1) | — | RBI MPC press releases ([rbi.org.in](https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx)); hardcoded as `RBI_REPO_RATE_HISTORY` in `strategy.py` | Step function (~55 announcements over 2008–2026) |
 
 Most market data is downloaded live at runtime via `yfinance`; NIFTY 200 Momentum 30 is loaded from a static CSV (`data/momentum30_history.csv`) sourced from niftyindices.com via the `nselib` Python library. India VIX series begins March 2008, which sets the in-sample start at **2008-04-01**. A warmup period from **2006-01-01 to 2008-03-31** seeds rolling windows and is excluded from results. GOLDBEES.NS data starts 2009-01-02; pre-2009 stress-flat days remain fully flat in the backtest (gold instrument not yet tradable). Cleaning is minimal: forward-fill across mismatched holiday calendars, drop full-NaN rows.
 
-**v1.4 introduces `^TNX` (US 10-year Treasury yield) as input to the macro-confirmed gold rotation gate.** US real-rate dynamics are the most fundamental macro driver of gold prices globally; including this signal as a gate condition prevents gold rotation during periods when US rates are rising (creating a structural headwind for gold). Available via yfinance with full sample coverage.
+### Fundamentals data (v2.2 — defensive basket construction)
+
+The defensive basket requires point-in-time corporate financials + a stock price panel for individual-name beta/vol computation. Sources and pipeline:
+
+**Primary fundamentals source — BSE annual reports.** ~6,751 annual-report PDFs downloaded from bseindia.com covering ~1,561 stocks back to FY2007. Parsed via a table-extraction pipeline (`experiments/stock_momentum/bse_pipeline_full.py`) that handles both regex-based and pdfplumber-based extraction depending on PDF format. Line items extracted include Revenue, EBIT, Net Profit, Cash Flow from Operations, Total Debt, Total Equity, Interest Expense, Total Assets, Current Assets, Current Liabilities. Output: `data/bse_pipeline/extended_fundamentals_v2.parquet` (~1 MB, ~194k rows).
+
+**Secondary source — Screener.in bulk export.** Merged with BSE-parsed data to fill coverage gaps. **Important post-processing fix**: the Screener export used non-standard column labels for CFO (only ~10% coverage under the original label) and Total Equity (~17% coverage under the raw label). A label-mapping step (`experiments/stock_momentum/panel_postprocess.py`) restored these to 93% and 96% coverage respectively for post-2014 data. Pre-2014 data has known gaps in Current Assets / Current Liabilities and EBIT — flagged explicitly.
+
+**Era-adapted Piotroski F-score.**
+- Post-2014 (~2015+): full 9-component Piotroski F-score computable for most names (P7 methodology, all nine binary checks available)
+- Pre-2014 (~2008-2014): only 8 components computable due to missing Current Assets/Liabilities in the pre-2014 source data (Q8 methodology, one component dropped). The scale is normalized to be comparable across eras.
+
+**Coverage and confidence:**
+- Screener-sourced data: ~94% accuracy against ground truth for spot-checked large-caps
+- BSE-parser-sourced data (high-confidence tier): ~87% accuracy
+- Both sources dropped where confidence is low or catastrophic outliers detected
+- Banks excluded from the fundamentals panel (different accounting standards; equity/debt ratios not comparable to non-financials)
+
+**Quality composite score.** Combines Piotroski F-score (era-adapted) with a ratio composite (ROCE 3-year avg, Revenue CAGR 5-year, D/E, Interest Coverage, Cash Conversion 3-year avg). Cross-sectional percentile computed within each rebalance date's eligible universe. Output: `data/quality_factor/quality_scores_pit.parquet` (per-symbol × rebalance-date). See `experiments/stock_momentum/quality_factor.py` for exact scoring logic.
+
+**Universe and momentum scores.** `data/momentum_scores/scored_universe.parquet` — 500 stocks × 36 semi-annual rebalances (2008-06-30 → 2025-12-31). Contains liquidity rank (`universe_rank_turnover` = rank by 60-day rupee turnover), momentum metrics (mom_12_1, mom_6_1, risk_adj_mom_*), and composite momentum score used for the top-N liquid universe filter in the defensive basket. Momentum computation: `experiments/stock_momentum/build_universe.py`.
+
+**Stock price panel — NOT bundled.** `data/yfinance_bulk/adjusted_prices_panel.parquet` (~544 MB) contains daily adjusted-close prices for 1,274 NSE-listed symbols spanning 2007-01-02 → 2026-06-11. Bulk-downloaded from yfinance. **Not committed to the repo due to size.** Users who want to rebuild the defensive-basket artifacts from source need this file — fetch script: `experiments/stock_momentum/bulk_pull_yfinance.py` (runs against a symbol list; multi-hour download). Alternatively, the two runtime artifacts (`defensive_basket_holdings.parquet` + `defensive_basket_daily_returns.parquet`) are bundled and are the only files production loads at runtime.
+
+**Survivorship handling.** The stock price panel includes delisted names (yfinance retains history for delisted tickers when available). Fundamentals panel includes historical data for names that have since delisted. No survivorship bias adjustment beyond what these sources provide — a known limitation for the fundamentals side, where the coverage skews toward names that survived long enough to have multiple years of reported data.
+
+**Point-in-time discipline.** All fundamentals lookups use a 6-month reporting lag (via `latest_fy_at_date(rebalance_date)` in `defensive_basket.py` / `backtest_defensive_rotation.py`). A June-30 rebalance uses fiscal-year data ending approximately 12 months earlier (accounting for the typical March fiscal year-end + 6-month reporting cushion). Prevents look-ahead bias from using not-yet-published fundamentals.
+
+**Cross-validation.** NIFTY 200 Momentum 30 replica (top-30 equal-weighted from our momentum ranking) tracks the actual NSE-published index at daily-return correlation 0.892 (2009-2024). Absolute CAGR gap ~2.86pp (our replica outperformed — small-cap tilt in equal-weight vs cap-weighted index).
+
+### Data-source constants
+
+**`^TNX` (US 10-year Treasury yield)** was introduced in v1.4 as one of the entry conditions for the G10 gold rotation gate. Rationale: US real-rate dynamics are the most fundamental macro driver of gold prices globally, and including this signal as a gate condition prevents gold rotation during periods when US rates are rising (creating a structural headwind for gold). Available via yfinance with full sample coverage. Still needed by the v2.1 configuration (opt-in via `enable_defensive_basket=False`); not required for v2.2 production.
 
 **NIFTY 200 Momentum 30 history note.** The index was launched live in August 2020 with backfilled history to April 2005 (the index's official base date) by NSE Indices Ltd. The backfilled portion uses the same mechanical methodology (semi-annual rebalance, momentum score = 6m + 12m risk-adjusted price momentum, top 30 stocks by score from NIFTY 200 universe) that NSE applies live. Cross-validation against yfinance over the 2019+ overlap period showed perfect correlation (1.000000) and 0.0000% mean relative difference, confirming data fidelity.
 
-The RBI repo rate timeline is **hardcoded** rather than fetched at runtime because (a) no reliable free Indian short-rate API exists with full 2008-2025 coverage, (b) the repo rate is a step function with only ~50 changes over 17 years, ideal for a static table, and (c) hardcoding makes the backtest deterministic and auditable. Each row is sourced from the corresponding RBI MPC press release; the table is maintained manually and must be updated when RBI announces new rate decisions.
+The RBI repo rate timeline is **hardcoded** rather than fetched at runtime because (a) no reliable free Indian short-rate API exists with full 2008-2026 coverage, (b) the repo rate is a step function with only ~55 changes over 18 years, ideal for a static table, and (c) hardcoding makes the backtest deterministic and auditable. Each row is sourced from the corresponding RBI MPC press release; the table is maintained manually and must be updated when RBI announces new rate decisions.
 
 **Forward-testing implication:** When the strategy is run on dates after the last hardcoded entry, `build_rbi_repo_rate_series()` forward-fills the most recent rate indefinitely. This is correct as long as RBI hasn't moved the rate since the last entry — but goes silently stale if a rate change occurred and the table wasn't updated. For paper trading or live use, the table needs a manual refresh after each RBI MPC meeting (every ~6-8 weeks). Productionizing this — moving to a CSV-backed config file with a FRED API fallback — is on the roadmap.
 
@@ -339,13 +465,15 @@ The RBI repo rate timeline is **hardcoded** rather than fetched at runtime becau
 | Signal timing | Signals computed from day-T close; positions applied from T+1 open via `position.shift(1)`. No look-ahead. |
 | Rebalance | Daily — position re-evaluated every trading day. |
 | Benchmark | NIFTY 50 buy-and-hold, no costs. |
-| Transaction costs | NIFTY 50 futures (short side): **3 bps per leg**. NIFTY 200 Momentum 30 ETF (long side): **6 bps per leg** (ETF spread + STT; slightly wider than NIFTY futures due to lower turnover). Gold (GOLDBEES.NS): **5 bps per leg** (ETF spread + STT). Cash sweep: **0 bps** (institutional auto-sweep into liquid fund). Applied as `\|Δposition\| × cost_bps / 10,000`, deducted from same-day return. Long↔short flips cost both legs. |
-| Cash yield on flat days (v1.2) | Time-varying RBI repo rate as a step function (range 4.0%–9.0% over 2008–2025), with a **100 bps haircut** applied daily on fully-flat days to model realistic institutional liquid-fund execution (instrument spread + TER + sweep friction). Hardcoded in `RBI_REPO_RATE_HISTORY` in `strategy.py`. Setting `cash_yield_haircut_bps=0` recovers v1.1.1's pure-repo assumption (sensitivity in Backtest Caveats). |
-| Gold rotation (v1.4–v1.5) | Per-latch state machine with macro-confirmed entry gate: 0 < gold 10d return ≤ 10% AND INR 10d return > 0.5% AND US 10Y 20d return < 0 AND NIFTY < 100 DMA (v1.5 bear-regime requirement). One-way door exit preserved (exit to cash if gold 10d turns negative mid-latch); mid-latch bull-flip exit added in v1.5. Replaces v1.2–v1.3.1 single-condition gate (gold_10d > 0). |
-| Tax model (v1.4) | Indian short-term capital gains, annual-net model. Tax of 15% applied to net positive annual returns. Loss years unchanged. Losses within a year offset gains. Applied natively in `MacroStrategy.run()` with `apply_tax=True` default. Opt-out with `apply_tax=False` for pre-tax analysis. |
-| Risk-free rate | 6% per annum (India 10Y G-Sec proxy) for Sharpe and Sortino. |
-| Out-of-sample | 2026-01-01 to present held out from parameter selection. |
-| Parameter selection | Judgement-based; no grid search or formal optimization. |
+| Transaction costs | NIFTY 50 futures (short side): **3 bps per leg**. NIFTY 200 Momentum 30 ETF (long side): **6 bps per leg** (ETF spread + STT; slightly wider than NIFTY futures due to lower turnover). Gold (GOLDBEES.NS, opt-in v2.2): **5 bps per leg**. Defensive quality basket (v2.2, on stress-flat days after 40-day gate): **30 bps per side** covering brokerage (~2 bps), STT (~10 bps), exchange charges (~1 bp), stamp duty (~1 bp), GST on brokerage (~2 bps), and slippage (~14 bps) on the 18-name basket. Applied as `\|Δposition\| × cost_bps / 10,000` for index / futures / gold; entry+exit for the defensive basket (each side × alloc, so 0.5 alloc × 30 bps = 15 bps of NAV per transition). Long↔short flips cost both legs. Cash sweep: **0 bps** (institutional auto-sweep into liquid fund). |
+| Cash yield on flat days (v1.2) | Time-varying RBI repo rate as a step function (range 4.0%–9.0% over 2008–2026, avg 6.27%), with a **100 bps haircut** applied daily on fully-flat days to model realistic institutional liquid-fund execution (instrument spread + TER + sweep friction). Hardcoded in `RBI_REPO_RATE_HISTORY` in `strategy.py`. Setting `cash_yield_haircut_bps=0` recovers v1.1.1's pure-repo assumption (sensitivity in Backtest Caveats). |
+| Defensive quality basket (v2.2) | On stress-flat days after 40-day persistence gate, replace flat-day return with 50/50 blend of basket return + cash. Basket = 18 equal-weighted names, semi-annual rebalance (Jun/Dec), top-200 liquid + hard rules (cfo > 0, np > 0, D/E ≤ 3) + quality percentile ≥ 0.60 + beta ≤ 0.85 + vol ≤ 0.30 + defensive-sector tilt (+0.5 bonus for FMCG/Pharma/Utility/IT) + sector cap 5. Cost: 15 bps NAV at entry + 15 bps NAV at exit + STCG on cumulative gain. Runtime overlay loaded from `data/defensive_basket_daily_returns.parquet`. Rebuild via `python build_defensive_basket.py`. Enabled by `enable_defensive_basket=True` (default in `MacroStrategy`). |
+| Gold rotation (v1.4–v2.1, SUPERSEDED in v2.2) | Per-latch state machine with macro-confirmed entry gate: 0 < gold 10d return ≤ 10% AND INR 10d return > 0.5% AND US 10Y 20d return < 0 AND NIFTY < 100 DMA. Superseded by defensive basket in v2.2; code retained in the combiner. Opt-in via `enable_defensive_basket=False` (reproduces v2.1 gold-rotation behavior byte-for-byte). |
+| Tax model — main return | Indian 15% short-term capital gains, annual-net model. Tax of 15% applied to net positive annual returns. Loss years unchanged. Losses within a year offset gains. Applied natively in `MacroStrategy.run()` with `apply_tax=True` default. Opt-out with `apply_tax=False` for pre-tax analysis. |
+| Tax model — defensive basket (v2.2) | Short-term capital gains at exit: 15% pre-2024-07-23, 20% after (India rate stepped up mid-2024). Applied to the cumulative alloc-weighted gain over the deployment window, deducted on the exit day. |
+| Risk-free rate (Sharpe) | Time-varying RBI repo rate (raw, not haircut-adjusted) — same series used for the cash-yield model. Avg 6.27% (FULL 2008-2026), 5.57% (OOS 2017-2026). Applied as `(r - repo/252)` for daily excess-return computation. Reconciliation with legacy 0.84: the v2.1 README's 0.84 was measured through 2025-12-31 on the prior yfinance data snapshot; the canonical 0.81 is through 2026-05-11 (2026 partial ~4.5 months) with refreshed data. Same rf convention throughout — the 0.03 delta is endpoint extension + data refresh, not a methodology change. |
+| Out-of-sample | 2017-01-01 to 2026-05-11 designated OOS for parameter selection freeze. 2026 partial (~4.5 months) noted separately in all headline tables. |
+| Parameter selection | Judgement-based for macro-signal thresholds; explicit in-sample-lock-then-OOS-apply discipline for v2.2 defensive basket parameters (persistence N=40, alloc=0.5). No grid-search overfitting. |
 
 ---
 
@@ -398,9 +526,9 @@ Maximum drawdown of **−12.78%** vs NIFTY's **−51.72%** (both post-tax) — a
 
 ### Cost Sensitivity
 
-The long-side asset is NIFTY 200 Momentum 30 (ETF, 6 bps per leg base case). The table below varies the long-side cost; NIFTY short cost (3 bps) and gold cost (5 bps) are held fixed. Cash sweep is treated as zero-cost at all levels. All numbers post-tax.
+The long-side asset is NIFTY 200 Momentum 30 (ETF, 6 bps per leg base case). The table below varies the long-side cost; NIFTY short cost (3 bps) and gold cost (5 bps) are held fixed. Cash sweep is treated as zero-cost at all levels. All numbers post-tax. Numbers below are for the v2.1 Config 7 baseline (through 2025-12-31); the shape of the sensitivity is unchanged in v2.2 — the defensive-basket layer is independent of the Mom30-ETF cost dimension.
 
-| Long-side cost (bps/leg) | Cumulative Return | CAGR | Sharpe | Max DD |
+| Long-side cost (bps/leg) | Cumulative Return | CAGR | Sharpe (rf-adjusted approx) | Max DD |
 |---|---|---|---|---|
 | 0 | 1,827.4% | 17.46% | 0.89 | -12.8% |
 | 3 | 1,722.7% | 17.11% | 0.87 | -12.8% |
@@ -438,11 +566,14 @@ The strategy navigates GFC-style and COVID-style regimes well — both feature d
 
 The strategy went live in development through 2025-12-31, with 2026 reserved as out-of-sample. Through 2026-05-11:
 
-| | 2026 YTD return |
+| | 2026 YTD return (through 2026-05-11) |
 |---|---|
-| **Strategy (v2.1, post-tax)** | **+2.0%** |
+| **Strategy (v2.2 production, post-tax)** | **~+2.0%** |
+| Strategy (v2.1 baseline, post-tax) | ~+2.0% |
 | NIFTY 50 Buy & Hold (post-tax) | -8.9% |
-| **Outperformance** | **+10.9pp** |
+| **Outperformance vs NIFTY** | **~+11pp** |
+
+The v2.2 defensive basket had limited effect on this specific 2026 OOS window because the March 2026 stress latch was too short to fully clear the 40-day persistence gate before the regime flipped back to bull. The v2.2 uplift is concentrated in the ~17 sustained bear windows the strategy has seen historically, not in short-duration events like this one.
 
 (2026 YTD is a loss year for NIFTY so post-tax NIFTY = pre-tax NIFTY; the 10% LT tax only applies to gains.)
 
@@ -654,7 +785,7 @@ The long-side asset (NIFTY 200 Momentum 30) beats NIFTY 50 by ~4.8pp CAGR over t
 
 Documented by Daniel & Moskowitz (2016, *Momentum Crashes*): after a sharp market crash, a momentum index holds stale pre-crash winners (defensives that survived the crash) while the recovery is led by beaten-down cyclicals. Because the NIFTY 200 Momentum 30 momentum score is computed over trailing 6- and 12-month windows and rebalances only semi-annually (June/December), the index cannot refresh into the recovery leaders until a full rebalance cycle after the bottom. In 2009, momentum lagged NIFTY through most of the year; the index did not flip into recovery cyclicals until the December 2009 rebalance, by which point the trailing windows were dominated by the recovery.
 
-**Production overlay (v2.0).** When the strategy is in a long position immediately after a bear→bull regime flip preceded by a NIFTY drawdown of 15% or more, hold NIFTY 50 instead of NIFTY 200 Momentum 30 for the next 60 trading days, then revert to Momentum 30. See [Signal Logic section 5](#5-post-bear-nifty-recovery-overlay-v20) for full mechanics and sensitivity. Empirical impact: +1.00pp CAGR vs v1.5, +0.04 Sharpe, max drawdown unchanged. The overlay fires only during V-recovery windows (~180 days out of the 17.7-year sample, primarily 2009 and 2020) and does not affect the strategy outside those windows.
+**Production overlay (v2.0).** When the strategy is in a long position immediately after a bear→bull regime flip preceded by a NIFTY drawdown of 15% or more, hold NIFTY 50 instead of NIFTY 200 Momentum 30 for the next 60 trading days, then revert to Momentum 30. See [Signal Logic section 5](#5-post-bear-nifty-recovery-overlay-v20) for full mechanics and sensitivity. Empirical impact: +1.00pp CAGR vs v1.5, +0.04 Sharpe, max drawdown unchanged. The overlay fires only during V-recovery windows (~180 days out of the ~18-year sample, primarily 2009 and 2020) and does not affect the strategy outside those windows.
 
 ### Rejected alternative: Daniel-Moskowitz bear-state rule (R1)
 
@@ -807,13 +938,58 @@ All numbers in the table below are post-tax. Pre-v1.4 rows did not have a native
 | v1.4 | Slow-stress signal replaces supply-shock as default stress detector (INR 20d weakness + VIX 90d z-score + VIX 5d momentum). Macro-confirmed gold rotation gate replaces single-condition gate (adds INR + US 10Y macro confirmation, caps blow-off-top entries). Tax modeling integrated natively. Cross-country validation on US data 1995-2025 catches 9/9 documented stress events. New data dependency: ^TNX. | ~1,440% | 15.50% | 0.78 | -15.0% |
 | v1.5 | Gold-in-bull anomaly fix. Gold rotation entry now requires bear regime (NIFTY < 100 DMA) as a fourth gate condition on top of macro confirmation; mid-latch bull-flip exit added alongside the existing 10d-negative exit. Eliminates the 3-day May 2019 anomaly (-4.34pp) where slow-stress fired in bull regime and gold rotation triggered against a recovering equity tape. Backward-compatible via `gold_require_bear=False`. No new data dependencies. | 1,345.0% | 15.64% | 0.79 | -14.7% |
 | v2.0 | Adds two refinements. (1) Post-bear NIFTY recovery overlay: hold NIFTY 50 instead of Momentum 30 for the first 60 trading days following a bear→bull regime flip preceded by a NIFTY drawdown ≥15%. Targets the Daniel & Moskowitz (2016) V-recovery momentum-crash pattern. 2009 single-year improvement: +52% → +76%. (2) Slow-stress cooldown: suppress slow-stress re-fires for 5 trading days after each unsuppressed firing event. Prevents 2019 April-May whipsaw chop. Combined impact vs v1.5: CAGR 15.64% → 16.78% (+1.14pp), MaxDD −14.67% → −13.38%, Sharpe 0.79 → 0.83. Backward-compatible via `enable_v2=False` and `slow_stress_lock_days=0`. | 1,631.3% | 16.78% | 0.83 | -13.4% |
-| **v2.1** | **Adds 15% drawdown confirmation on panic-short. Panic-short can only fire when NIFTY's drawdown from its trailing 60-day high exceeds 15%. Suppresses the 2013-08-27 (drawdown ~13%, taper-reaction) and 2022-02-24 (drawdown ~11.3%, Ukraine-reaction) false fires. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6, 2020 fire (drawdown 11.1%) is suppressed; the next fire on March 9 (drawdown 15.5%) catches the move three days later, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. Combined impact vs v2.0: Sharpe 0.83 → 0.84 (+0.011), MaxDD −13.38% → −12.78%, CAGR essentially flat (−0.03pp). Backward-compatible via `panic_short_dd_threshold=0`. Current.** | **1,623.6%** | **16.75%** | **0.84** | **-12.78%** |
+| v2.1 | Adds 15% drawdown confirmation on panic-short. Panic-short can only fire when NIFTY's drawdown from its trailing 60-day high exceeds 15%. Suppresses the 2013-08-27 (drawdown ~13%, taper-reaction) and 2022-02-24 (drawdown ~11.3%, Ukraine-reaction) false fires. All four 2008 GFC panic-shorts (drawdowns 16–32%) preserved. Documented tradeoff: the March 6, 2020 fire (drawdown 11.1%) is suppressed; the next fire on March 9 (drawdown 15.5%) catches the move three days later, 2020 CAGR drops +52.21% → +46.25% but COVID protection still strongly captured. Combined impact vs v2.0: rf-adjusted Sharpe 0.79 → 0.81 (+0.02), MaxDD −13.38% → −12.78%, CAGR 16.78% → 16.52% (extended through 2026-05-11). Backward-compatible via `panic_short_dd_threshold=0`. | ~1,595% | 16.52% | 0.81 | -12.78% |
+| **v2.2** | **Adds defensive quality basket on stress-flat days beyond 40-day persistence gate (blended 50/50 with cash, 30 bps/side, STCG 15%/20%). REPLACES the v2.1 G10 gold rotation on stress-flat days (gold code retained behind `enable_defensive_basket=False`). Marginal Sharpe-neutral improvement: CAGR 16.52% → 16.85% (+0.33pp), rf-adjusted Sharpe 0.81 → 0.83 (+0.02), MaxDD −12.78% → −13.92% (slightly deeper). OOS 2017+: CAGR 15.95% → 16.10% (+0.15pp), Sharpe 0.79 → 0.80, MaxDD -12.78% → -10.88% (1.9pp shallower). Honest framing: incremental risk-adjustment layer, not a first-order driver. Basket construction and bake-off history in the [Defensive Quality Basket](#6-defensive-quality-basket-v22) section. Identity check: `enable_defensive_basket=False` reproduces v2.1 baseline byte-exact. Current.** | **~1,655%** | **16.85%** | **0.83** | **-13.92%** |
 
-The cumulative improvement from v1.5 to v2.1 is the largest single jump since the v1.3 long-side asset substitution: CAGR 15.64% → 16.75% (+1.11pp), Sharpe 0.79 → 0.84 (+0.05), max drawdown −14.67% → −12.78% (+1.89pp shallower), Calmar 1.07 → 1.31. Each of the three refinements was tested against a pre-specified parameter sweep with a disqualification rule (no variant that breaks 2008 GFC, 2018 September NBFC, 2020 COVID, or 2021 stress-window defense was retained); the selected thresholds (15% bear DD for recovery overlay, 5-day slow-stress cooldown, 15% panic-short drawdown confirmation) each sit on a tight plateau within their qualified range rather than at a cliff edge.
+The cumulative improvement from v1.5 to v2.1 was the largest single jump since the v1.3 long-side asset substitution: CAGR 15.64% → 16.52% (+0.88pp — endpoint through 2026-05-11), rf-adjusted Sharpe 0.79 → 0.81 (+0.02), max drawdown −14.67% → −12.78% (+1.89pp shallower). Each of the three v2.1 refinements was tested against a pre-specified parameter sweep with a disqualification rule (no variant that breaks 2008 GFC, 2018 September NBFC, 2020 COVID, or 2021 stress-window defense was retained); the selected thresholds (15% bear DD for recovery overlay, 5-day slow-stress cooldown, 15% panic-short drawdown confirmation) each sit on a tight plateau within their qualified range rather than at a cliff edge.
+
+v2.2's defensive quality basket adds a further +0.33pp CAGR / +0.02 rf-adjusted Sharpe. The improvement is marginal and Sharpe-neutral; the layer's earned place in production is as an incremental risk-adjustment mechanism, not as a source of significant new alpha. The basket parameters (persistence N=40, alloc=0.5) were tuned on 2008-2016 in-sample only, locked, and applied unchanged to OOS 2017-2026 — the standard research discipline the strategy has used since v1.4.
 
 v1.5's headline impact was on drawdown control (MaxDD −15.0% → −14.7%, Calmar 1.03 → 1.07) more than on CAGR (+0.14pp). The 2019 anomaly was a single 3-day window where the priority logic let gold rotation enter against a regime-bull tape; the fix closes it surgically without touching any other signal.
 
 v1.4's primary improvement vs v1.3.1 was methodological as well as mechanical. The cross-country validation on 31 years of US data provides substantially stronger empirical evidence that the signal architecture generalizes beyond the Indian sample, addressing the most direct overfitting concern that arises from a 17-year regime-conditional model. The 2013 taper-tantrum failure mode is cleanly addressed (+3.43pp). The macro-confirmed gold rotation gate specifically addresses the 2026 H1 gold-rotation failure mode by adding macro confirmation requirements (INR + US 10Y) on top of the v1.2 momentum gate.
+
+---
+
+## Superseded Research — G10 gold rotation
+
+**What it was.** The v1.4-v2.1 G10 gold rotation was a 5-condition macro-confirmed entry gate for the stress-flat allocation:
+1. Gold 10-day return in (0, 10%] — positive momentum but not blow-off-top
+2. USDINR 10-day return > 0.5% — rupee weakening (INR-priced gold tailwind)
+3. US 10-year Treasury yield 20-day return < 0 — falling US real rates (global gold tailwind)
+4. NIFTY below 100-DMA — bear regime confirmed (v1.5 requirement)
+5. Currently in a stress-flat latch (per strategy state)
+
+When all 5 fired, capital rotated from cash into GOLDBEES.NS. Held until either gold 10-day return turned negative (one-way-door exit within the latch) or the regime flipped back to bull.
+
+**Why it was replaced (v2.2).** The gate was over-restrictive — it fired on only ~27 stress-flat days across the 18-year sample, providing negligible incremental alpha in aggregate. The defensive quality basket bake-off (V7 native) showed:
+- Ungated ("simple") gold — bear-regime-only, no 5-condition gate — blew out drawdown to ~-23% (much worse than the strategy's headline -13%)
+- The 5-condition gate was so restrictive it barely ever fired (27 out of ~1670 stress-flat days = 1.6%)
+- A defensive quality basket alternative was a cleaner, better-tested replacement, deploying ~368 days across the sample with lower MaxDD deepening
+
+The G10 gate was a real research effort — designed to avoid the 2026-01 gold blow-off-top (v1.2-v1.3.1 gate would have entered at +24% gold momentum and lost -19% within days), and the macro-confirmation logic was validated against US Treasury yield behavior. But in the end it was solving a smaller version of the problem the defensive basket solves better. This is an honest "we built it, tested it, and replaced it with something we trust more" — not "we found a bug." The code remains available as opt-in.
+
+**How to reproduce v2.1 (gold rotation active).** Set `enable_defensive_basket=False` when constructing `MacroStrategy`. Byte-identical reproduction confirmed via IC1 identity check.
+
+---
+
+## Ongoing / Rejected Research
+
+Beyond the tests documented above, several substantial research efforts have been undertaken and either rejected or shelved. Documented here because they represent real work and inform what to try (and not try) next.
+
+**Momentum basket for bull-day exposure — 5 iterations (V1-V5), all rejected.** The hypothesis was that a self-picked momentum basket could beat the cheap NIFTYMOM30 index on bull days by adding quality filtering, size tilting, or risk management. Five iterations tested (V1: base momentum; V2: quality-gated; V3: cost/persistence fixes; V4: individual-name risk caps; V5: vol-cap sweep). Best result: V5 vc50 achieved OOS Sharpe 1.23 (vs Mom30 index R1's 1.24 — essentially tied on Sharpe) and OOS CAGR 15.78% (-0.32pp gap) but with -23.67% MaxDD (vs R1's -10.88% — 12.79pp deeper). Bottom line: **no variant beats the cheap Mom30 index on Sharpe AND MaxDD simultaneously**.
+
+Root cause: the Mom30 index (a) is cap-weighted so avoids concentration in mid/small caps that get destroyed in factor rotations (2018 IL&FS crisis + LTCG-tax combined shock, 2022 quality selloff), (b) costs 6 bps/side vs our 15-30 bps/side, and (c) uses the same underlying momentum signal we do (rank_composite_risk_adj is reverse-engineered from NSE's methodology). The self-picked basket earns +2.3pp bull-only CAGR on average but pays back through -25% bull-only MaxDD vs the index's -8%.
+
+**Meaningful sub-finding from momentum-basket research**: the hard-rules quality gate (cfo > 0, np > 0, D/E ≤ 2) added +3.7pp OOS CAGR / +0.26 Sharpe over pure momentum. Quality filtering matters — just not enough to overcome the fundamental cost + diversification disadvantage vs a cheap index. Scripts: `experiments/stock_momentum/momentum_basket_bakeoff_v[1-5].py`; diagnostic: `diagnose_basket_drawdown.py`.
+
+**Bull-side momentum basket status: NOT SHIPPED, but research ongoing.** Next iterations to try (documented here as roadmap, not built): sector cap (max 5 per sector, matching defensive-basket construction — would prevent 2018 mid-cap-chemicals concentration), inverse-vol weighting (real risk parity), momentum-crash detection (Daniel-Moskowitz signal), sector-neutral momentum (top-3 per sector). If any of these lets us match the Mom30 index on OOS Sharpe with MaxDD within 5pp of the index's -11%, the momentum basket ships. Currently it stays in `experiments/`.
+
+**Vol-targeting overlay — tested, rejected.** A volatility-scaling overlay on Config 7 was tested exhaustively (18 parameterizations across window / target-vol / cap / regime-gating dimensions). Initial results looked like +1pp CAGR — until leverage financing cost was properly charged (RBI repo + 200 bps spread on borrowed notional above 1×), which added ~170-200 bps/yr of drag and erased the gain. Best "delever-only" variant (cap=1.0×) improved rf-adjusted Sharpe by +0.07 but at cost of -3.2pp CAGR — not a good tradeoff. All levered variants (cap 1.5×+) LOST vs Config 7 after financing cost. Rejected. This is the strategy's canonical "rigor lesson": always charge the real cost of leverage before believing a levered backtest.
+
+**Quality as a standalone factor — tested, weak.** Buying names by pure quality score alone (no momentum) produced weak / non-monotonic returns across deciles. Quality only pays as an interaction with momentum (per Novy-Marx 2013). Documented in `experiments/stock_momentum/quality_backtest.py`.
+
+**Stress-resilient basket (V8) — worse than V7 generic.** A more sophisticated defensive-basket construction ranking by mean return across prior bear windows only (no look-ahead) with balanced beta band 0.6–1.1 was tested. It underperformed the V7 generic construction across FULL and OOS. Reason: bear-window defensive leadership rotates (2008 defenders ≠ 2020 defenders ≠ 2022 defenders); tilting toward historical bear winners does not generalize. V7 basket_cash_blend retained.
 
 ---
 
@@ -824,15 +1000,39 @@ git clone https://github.com/Neil-2501/nifty-macro-regime.git
 cd nifty-macro-regime
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+
+# Runtime artifacts for the defensive basket are bundled with the repo:
+#   data/defensive_basket_holdings.parquet
+#   data/defensive_basket_daily_returns.parquet
+# Production strategy loads these directly.
+
 python strategy.py
 ```
 
-Data is fetched via `yfinance` at runtime — no separate data download step. Runtime is ~30–60 seconds, network-bound. All headline results print to stdout.
+Market data (yfinance) is fetched at runtime — no separate download step needed for the main strategy. Runtime is ~30–60 seconds, network-bound. All headline results print to stdout. Defensive basket ships ON by default in `MacroStrategy(...)`; set `enable_defensive_basket=False` to reproduce v2.1 baseline (Config 7 with G10 gold rotation).
 
-To run the cross-country validation separately:
+**To rebuild defensive-basket artifacts from source data** (required if you want to regenerate the holdings + daily returns yourself, e.g., after adding data through a later date):
+
+```bash
+# Requires the ~544 MB stock-price panel data/yfinance_bulk/adjusted_prices_panel.parquet
+# Fetch first if not present:
+# python experiments/stock_momentum/bulk_pull_yfinance.py
+
+python build_defensive_basket.py
+```
+
+Rebuild runtime is ~2-3 minutes (beta/vol computation over 200 stocks × 36 rebalance dates). Outputs the two runtime parquets.
+
+**Cross-country validation** (US 1995-2025):
 
 ```bash
 python validate_us_cross_country.py
+```
+
+**Identity check** (verify defensive-basket ON/OFF matches canonical R1 / Config 7 baseline):
+
+```bash
+python phase1_verify_identity.py
 ```
 
 ---
