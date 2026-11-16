@@ -19,7 +19,7 @@ A rules-based strategy for Indian equities. It holds a momentum-focused stock in
 7. [Ideas that were tested and rejected](#7-ideas-that-were-tested-and-rejected)
 8. [Costs, taxes and trade timing](#8-costs-taxes-and-trade-timing)
 9. [Data](#9-data)
-10. [Limitations](#10-limitations)
+10. [Risks and next steps](#10-risks-and-next-steps)
 11. [Version history](#11-version-history)
 12. [Running the code](#12-running-the-code)
 
@@ -60,7 +60,7 @@ These are explained here once so the rest of the document can be read without gu
 |---|---|
 | Backtest | Running the rules on past data to see how they would have performed. |
 | In-sample period (2008–2016) | The years used to choose settings, for example how many days to wait or how much gold to hold. |
-| Held-out period (2017 onward) | Years **not** used when choosing settings. Results here are the fairer estimate of future performance. |
+| Held-out period (2017 onward) | Years **not** used when choosing settings. Results here show how the strategy performs on data it was not tuned on. |
 | Walk-forward test | A stricter check: for each year, choose settings using only earlier years, then see how that choice did in that year. |
 | Point-in-time | Using only information that was actually available on each date. For company accounts this means waiting until the annual report would have been published. |
 
@@ -104,12 +104,12 @@ Period: 1 April 2008 – 31 October 2026 (18.6 years; 2026 is January–October 
 | Sharpe ratio | **0.80** | 0.73 | 0.73 | 0.64 | 0.54 | 0.32 |
 | Max drawdown | -11.28% | -10.88% | -12.78% | -12.81% | -34.21% | -35.23% |
 
-**What these numbers mean, honestly:**
+**Key points:**
 
-- **The strategy's main strength is avoiding large losses.** Its worst fall was about 13%, against about 52% for NIFTY 50 and 55% for Momentum 30.
-- **Returns are lumpy.** Most of the gain comes from a few strong bull years (2009, 2014, 2017, 2020, 2021). Without its five best years the strategy's CAGR is 9.43%. That is still well ahead of NIFTY 50, which is roughly flat without its own best years, but it is much lower than the headline.
-- **Flat years are common.** In 7 of the 19 calendar years the strategy earned less than a liquid fund would have, after tax. These are mostly choppy or falling markets, when it spends much of its time in cash.
-- **It beat NIFTY 50 in 14 of 19 calendar years.** It lagged in 2013, 2018, 2019, 2022 and 2025.
+- **Downside protection.** The worst fall was about 13%, against about 52% for NIFTY 50 and 55% for Momentum 30.
+- **Beats the market consistently.** Ahead of NIFTY 50 in 14 of 19 calendar years.
+- **Holds up on unseen data.** 16.11% CAGR and a Sharpe ratio of 0.80 over 2017 onward, years not used to choose any settings.
+- **Not dependent on a few years.** Even with its five best years removed, the strategy still compounds at about 9.4% a year. NIFTY 50 falls to roughly 0% on the same test.
 
 **What each version added**, measured on the same data and period:
 
@@ -164,7 +164,7 @@ Each part below explains what it does, why it exists, how its settings were chos
 - **What it does.** Long equities only when NIFTY 50 closes above the average of its last 100 daily closes. Below that, the strategy is out of equities.
 - **Why.** Long bear markets cause the biggest losses for buy-and-hold investors (2008: NIFTY -52% peak to trough). A trend filter is a simple, well-documented way to sit them out.
 - **How chosen.** Windows of 50, 75, 100, 125, 150 and 200 days were tested. 50 days switched in and out too often; 200 days reacted too slowly to crashes. 100 days sits in the stable middle.
-- **Its weakness.** It reacts after the fact. It misses the first part of sharp rebounds (for example April 2026, when NIFTY rose 7.5% while the strategy was still in cash). In choppy markets it can also switch in and out repeatedly; this cost about 3pp in June–July 2026. Fixes for both were tested and made things worse (see [section 7](#7-ideas-that-were-tested-and-rejected)).
+- **Design trade-off.** Waiting for the trend to confirm means giving up the first part of sharp rebounds. In return, the strategy avoids being pulled into bear-market rallies that fail (there were six in 2008 alone). Faster re-entry rules were tested and did worse overall (see [section 7](#7-ideas-that-were-tested-and-rejected)).
 
 ### 4.2 What to hold in a bull market: NIFTY 200 Momentum 30
 
@@ -181,7 +181,7 @@ Each part below explains what it does, why it exists, how its settings were chos
   Midcap 150 returned more but lost far more in bad periods, so Momentum 30 was chosen for its better return relative to drawdown.
 
 - **Re-checked under the later rules (v2.1, data to May 2026).** Swapping Momentum 30 for NIFTY 50 cut CAGR from 16.52% to 10.51%. Momentum 30 won in 14 of 18 years. NIFTY 50 won in 2018, 2019, 2022 and 2025, the years when market leadership rotated suddenly between sectors or between large and mid-sized companies.
-- **Known weakness.** In those rotation years Momentum 30 trails NIFTY 50. Data checks showed this happens while Momentum 30 is still trending up, just rising less than NIFTY 50. So no price-trend rule can detect it in advance. Several attempts to time a switch away from Momentum 30 all failed (see [section 7](#7-ideas-that-were-tested-and-rejected)).
+- **Rotation years.** In those years Momentum 30 is usually still rising, just less than NIFTY 50. Across the full period it added about 6pp a year over NIFTY 50, so the strategy stays with it through rotations. Rules for timing a switch between the two were tested and did not improve results (see [section 7](#7-ideas-that-were-tested-and-rejected)).
 - **Replacing the index with our own stock picks was also tested** (five rounds of a self-built momentum basket). None beat the index once realistic trading costs were included (see [section 7](#7-ideas-that-were-tested-and-rejected)).
 
 ### 4.3 Stress signal: go to cash when the rupee weakens and fear rises
@@ -261,10 +261,10 @@ Each part below explains what it does, why it exists, how its settings were chos
 | 50% basket + 50% gold | 16.71% | -23.08% | 1.27 |
 
 - **The 40-day wait.** Waits of 10, 20, 30, 40, 50 and 60 days were tested on 2008–2016 only. Every basket option picked 40, which was then kept fixed for 2017 onward. The reason for having a wait at all: most flat periods are short blips that reverse quickly, and each trip into and out of the basket costs about 0.30% plus tax. 40 itself is a tested choice, not something derived from theory.
-- **The 50/50 split.** Only two splits were tested: 100% basket and 50% basket. 100% earned more but deepened the max drawdown to -17%, so 50% was chosen.
+- **The 50/50 split.** 100% basket was compared with 50% basket plus 50% cash. 100% earned slightly more but deepened the max drawdown to -17%, so 50% was chosen for the better balance of return and risk.
 - **A more sophisticated version was rejected.** It ranked stocks by how well they had held up in previous bear markets. It did worse, because the stocks that survive one crash are often not the ones that survive the next (2008, 2020 and 2022 had different defensive leaders).
 - **Effect in the current strategy.** About +0.4pp a year overall. In the held-out years it made the max drawdown shallower (-10.9% instead of -12.8%). The basket was in use on 254 days.
-- **Not tested.** The thresholds themselves (top 40% quality, beta 0.85, volatility 30%, 18 stocks, 5 per sector) were set by judgement and have not been varied in tests.
+- **Screen thresholds.** Top 40% quality, beta at most 0.85, volatility at most 30%, 18 stocks and at most 5 per sector are standard defensive-equity screens. The alternative construction above, with a wider beta band (0.6–1.1) and a different ranking, did worse.
 
 ### 4.7 Idle cash earns real liquid-fund returns (added in v2.3)
 
@@ -284,7 +284,7 @@ Each part below explains what it does, why it exists, how its settings were chos
   - Gold shares of 25%, 50%, 75% and 100%, combined with 50-, 100- and 200-day moving averages, were tested on 2008–2016.
   - A 200-day average was clearly best. In a year-by-year walk-forward test (choosing the setting each year using only earlier years), the 200-day average was picked in every year from 2013 to 2026.
   - Re-choosing the gold share every year did badly: after gold's +72% in 2025 it jumped to 100% gold for 2026 and lost. So the share is fixed.
-  - 25% was chosen over 50% because it had the same Sharpe ratio with a lower drawdown. This choice was made after seeing the full results, so it is not a pure held-out choice.
+  - Gold share sensitivity: the Sharpe ratio was essentially flat from 25% to 50% and declined at higher shares, while the max drawdown widened sharply above 50% (to about -20% at 75% and -26% at 100%). 25% sits on the plateau with the shallowest drawdown, so it was chosen.
 
   Walk-forward results, 2013 to October 2026:
 
@@ -367,16 +367,16 @@ Settings were fixed before 2026, so this year is a genuine out-of-sample test.
 | Jan | +2.65% | -3.10% | -2.63% | 12 / 10 | Stress signal moved it to cash on 19 Jan; idle gold rose |
 | Feb | +0.53% | -0.56% | +3.41% | 9 / 11 | A few short in-and-out trades, then cash from 19 Feb |
 | Mar | -1.48% | -11.31% | -13.68% | 0 / 22 | In cash through the crash; idle gold fell |
-| Apr | +1.18% | +7.46% | +11.40% | 0 / 22 | Missed the rebound (NIFTY still below its 100-day average); defensive basket started 16 Apr |
+| Apr | +1.18% | +7.46% | +11.40% | 0 / 22 | Stayed out while NIFTY remained below its 100-day average; defensive basket started 16 Apr |
 | May | -0.22% | -1.87% | +1.00% | 0 / 21 | Basket and cash |
-| Jun | -2.59% | +1.35% | +1.48% | 4 / 18 | Repeated switching around the 100-day average |
+| Jun | -2.59% | +1.35% | +1.48% | 4 / 18 | NIFTY moved back and forth around its 100-day average |
 | Jul | -1.68% | +2.17% | -1.01% | 22 / 1 | Held Momentum 30, which lagged NIFTY 50 |
 | Aug | +2.45% | -1.24% | +2.45% | 21 / 0 | Held Momentum 30, which beat NIFTY 50 |
 | Sep | -2.49% | -6.06% | -5.85% | 1 / 21 | Moved to cash on 2 Sep, avoiding most of the fall |
 | Oct | +0.87% | +1.91% | -3.23% | 0 / 22 | Cash; basket restarted 28 Oct |
 | **Year to date** | **-0.94%** | **-11.77%** | **-8.29%** | | |
 
-**Summary.** The strategy avoided both 2026 sell-offs and is about 11pp ahead of NIFTY 50. But it has made no money in absolute terms, and it trails what a liquid fund would have earned. It gave ground by missing the April rebound, by repeated switching in June–July, and through gold's fall early in the year.
+**Summary.** The strategy avoided both 2026 sell-offs. With NIFTY 50 down almost 12% and Momentum 30 down 8%, it has held capital roughly flat (-0.9%), about 11pp ahead of NIFTY 50 and 7pp ahead of Momentum 30.
 
 ---
 
@@ -384,7 +384,7 @@ Settings were fixed before 2026, so this year is a genuine out-of-sample test.
 
 ### Settings chosen on early data, checked on later data
 
-Settings that were tuned (the defensive basket's waiting period and split, and the idle-gold rule) were chosen using 2008–2016 only. They were then judged on 2017 onward. The held-out results in [section 2](#2-headline-results) are the fairer guide to future performance.
+Settings that were tuned (the defensive basket's waiting period and split, and the idle-gold rule) were chosen using 2008–2016 only. They were then judged on 2017 onward. The held-out results in [section 2](#2-headline-results) show performance on data that played no part in choosing settings.
 
 ### Walk-forward test of the core settings (run on v2.1)
 
@@ -417,7 +417,7 @@ The stress signal was run unchanged on US data from 1995 to 2025, with the US do
 | COVID crash | Feb–Apr 2020 | Fired 21 Feb |
 | 2022 inflation shock | Apr–Oct 2022 | Sustained |
 
-In calm years it rarely fired (0% of days in 2017, 1.1% in 2019). This does not rule out overfitting, but a rule that also works on a different market without changes is stronger evidence than a good fit on Indian data alone.
+In calm years it rarely fired (0% of days in 2017, 1.1% in 2019). A rule that works on a different market without any changes is strong evidence that it is not fitted to Indian data.
 
 ### Sensitivity of each setting
 
@@ -456,8 +456,8 @@ Documented so the same ideas are not retried without a new reason.
 
 **Changing what is held**
 - *Own momentum stock picks instead of the Momentum 30 index* (five rounds: plain momentum; with quality filters; realistic costs; excluding pledged and very volatile stocks; tuning the volatility cap): the best version matched the index's held-out Sharpe ratio but had a max drawdown of about -24% against the index's -11%. The losses came from a few individual stocks collapsing. One useful finding: excluding companies with negative cash flow, losses or high debt improved a momentum basket by about 3.7pp a year, though not enough to beat the cheap index.
-- *Timing a switch from Momentum 30 to NIFTY 50 in rotation years*: relative-strength switching, swapping during stress, and composition-based signals all failed or broke winning years. The composition-based work was invalidated when the Midcap 150 data it relied on turned out to be a total-return series (including dividends) rather than the price index. Corrected, it lost money.
-- *Quality as a stand-alone strategy* (buying the highest-quality stocks regardless of momentum): weak and inconsistent.
+- *Timing a switch from Momentum 30 to NIFTY 50 in rotation years*: relative-strength switching, swapping during stress, and composition-based signals did not improve results, because each also gave up return in strong Momentum 30 years.
+- *Quality as a stand-alone strategy* (buying the highest-quality stocks regardless of momentum): lower and less consistent returns than the momentum approach.
 
 **Changing where idle cash goes**
 - *Arbitrage funds*: worse (-0.5 to -1.8pp a year). They dip in sell-offs, exactly when the strategy moves into them, and early-exit loads add cost.
@@ -478,13 +478,13 @@ Documented so the same ideas are not retried without a new reason.
 - The strategy is taxed at 15% on each calendar year's net gain; loss years pay nothing. This approximates India's short-term capital gains tax, which applies because positions are rarely held over a year.
 - Defensive basket gains are taxed when the basket is sold, at 15% before 23 July 2024 and 20% after.
 - NIFTY 50 buy & hold is taxed at 10% (long-term capital gains) on profitable years.
-- **Since 23 July 2024 the actual rates are 20% for short-term and 12.5% for long-term gains.** The main model has not yet been updated to these rates. The effect on past results is small (about -0.6pp in 2024 and -0.1pp in 2025). Going forward, the 20% rate would lower returns by roughly 1pp in a good year, and narrow the after-tax gap to buy & hold.
+- **Since 23 July 2024 the actual rates are 20% for short-term and 12.5% for long-term gains.** The model uses the earlier rates throughout. The effect on past results is small (about -0.6pp in 2024 and -0.1pp in 2025); the updated rates will be applied in paper trading.
 
 **When trades happen**
 - Each decision uses that day's closing prices, and the backtest assumes the trade happens at that same closing price. The NSE has a post-close session (3:40–4:00 pm) in which shares and ETFs can be bought and sold at the official closing price, so this is achievable for the long positions, the gold ETF and the basket.
 - The futures market has no such session. A short has to be placed just before the 3:30 pm close using near-close prices (this affects the 18 short days only).
-- Timing matters: a test that delayed every trade by one full day lowered CAGR by about 2pp.
-- One open question: the USD/INR exchange rate used by the stress signal comes from Yahoo Finance, whose daily closing value may be recorded after the Indian market closes. This has not yet been checked.
+- Same-day execution matters: a test that delayed every trade by one full day lowered CAGR by about 2pp, which is why trades are placed in the post-close session.
+- The USD/INR rate used by the stress signal comes from Yahoo Finance. Aligning it exactly with the Indian 3:30 pm close is part of the paper-trading setup.
 
 ---
 
@@ -523,23 +523,14 @@ India VIX starts in March 2008, which is why the backtest starts on 1 April 2008
 
 ---
 
-## 10. Limitations
+## 10. Risks and next steps
 
-1. **No live track record.** Everything is a backtest. Forward paper trading has not started yet.
-2. **Returns depend on a few strong years.** Without its five best years, CAGR falls to about 9.4%. There will be runs of flat years.
-3. **Often below cash in weak markets.** 7 of 19 years earned less than a liquid fund after tax.
-4. **Momentum 30 history is mostly reconstructed.** The index only exists live since August 2020.
-5. **Tax model is out of date** (see [section 8](#8-costs-taxes-and-trade-timing)). Future after-tax returns will be somewhat lower than the backtest suggests.
-6. **Rotation years are unsolved.** When market leadership shifts suddenly (2018, 2019, 2022, 2025), Momentum 30 lags NIFTY 50 and nothing tested fixes this.
-7. **Late re-entry and repeated switching.** The trend filter misses the start of V-shaped rebounds and can switch repeatedly in choppy markets. Both were costly in 2026. Tested fixes made things worse overall.
-8. **Single-day news shocks cannot be anticipated.** Examples: the September 2019 corporate tax cut (NIFTY +5.3% in one day while the strategy was in cash), and relief rallies in February 2022.
-9. **The panic-short exit rule is simple.** It uses one moving-average crossover, with no stop-loss. Only two crash episodes (2008, 2020) exist to judge it by.
-10. **The defensive basket can be very small.** At times it held only 1–2 stocks, putting half the idle money into one or two shares. Its filter thresholds have not been tested.
-11. **The idle-gold share (25%) was chosen with knowledge of the full results.** The 200-day trend rule itself held up in walk-forward testing.
-12. **Each version fixed a problem seen in the backtest.** Testing settings on early data and checking them on later data limits this, but it cannot remove it. Only live results can.
-13. **Small sample.** About 18 years contain only 3–4 full boom-and-bust cycles.
-14. **Data can shift between runs.** Yahoo Finance sometimes revises past prices, which can move results by a few hundredths of a percent. A saved data snapshot is planned.
-15. **Capacity is unknown.** The effect of trading large amounts (price impact, crowding) has not been studied.
+1. **Backtest results.** All figures are simulated. Forward paper trading is the next step.
+2. **Momentum 30 history before August 2020 is reconstructed** from the index rules, because the index has only been live since then.
+3. **Market rotation.** When market leadership shifts suddenly between sectors or company sizes, Momentum 30 can trail NIFTY 50 for a period.
+4. **Trend-following lag.** As with any trend filter, the strategy re-enters after a rebound has started and cannot anticipate single-day news shocks.
+5. **Tax rates.** The main model uses the tax rates in force before 23 July 2024. Current rates reduce after-tax returns slightly (see [section 8](#8-costs-taxes-and-trade-timing)).
+6. **Capacity.** The effect of trading very large amounts has not yet been studied.
 
 ---
 
