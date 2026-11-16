@@ -526,11 +526,16 @@ India VIX starts in March 2008, which is why the backtest starts on 1 April 2008
 ## 10. Risks and next steps
 
 1. **Backtest results.** All figures are simulated. Forward paper trading is the next step.
-2. **Momentum 30 history before August 2020 is reconstructed** from the index rules, because the index has only been live since then.
-3. **Market rotation.** When market leadership shifts suddenly between sectors or company sizes, Momentum 30 can trail NIFTY 50 for a period.
-4. **Trend-following lag.** As with any trend filter, the strategy re-enters after a rebound has started and cannot anticipate single-day news shocks.
-5. **Tax rates.** The main model uses the tax rates in force before 23 July 2024. Current rates reduce after-tax returns slightly (see [section 8](#8-costs-taxes-and-trade-timing)).
-6. **Capacity.** The effect of trading very large amounts has not yet been studied.
+2. **Sample size.** About 18 years of data, covering 3–4 full boom-and-bust cycles.
+3. **Momentum 30 history before August 2020 is reconstructed** from the index rules, because the index has only been live since then.
+4. **Market rotation.** When market leadership shifts suddenly between sectors or company sizes, Momentum 30 can trail NIFTY 50 for a period.
+5. **Trend-following lag.** As with any trend filter, the strategy re-enters after a rebound has started and cannot anticipate single-day news shocks (for example the September 2019 corporate tax cut).
+6. **Flat periods.** In choppy or falling markets the strategy spends long stretches out of equities, so returns in those periods are close to cash returns.
+7. **Panic short.** It has fired in two crash episodes (2008 and 2020), and it exits using a simple moving-average rule.
+8. **Basket concentration.** In some periods only a few stocks pass the defensive basket's screens, so that half of the idle money is held in fewer names.
+9. **Tax rates.** The main model uses the tax rates in force before 23 July 2024. Current rates reduce after-tax returns slightly (see [section 8](#8-costs-taxes-and-trade-timing)).
+10. **Data revisions.** Yahoo Finance occasionally revises past prices, which can move results by a few hundredths of a percent. A saved data snapshot is planned.
+11. **Capacity.** The effect of trading very large amounts has not yet been studied.
 
 ---
 
