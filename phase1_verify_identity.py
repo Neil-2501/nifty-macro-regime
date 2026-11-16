@@ -1,13 +1,16 @@
-"""PHASE 1 identity check — verify the strategy.py refactor is byte-clean.
+"""Verify that strategy.py reproduces the README's headline numbers, and that
+switching the newer features off reproduces the earlier versions.
 
-IC1: enable_defensive_basket=False must reproduce Config 7 baseline exactly
-     (16.52% CAGR, Sharpe 0.81, MaxDD -12.78% for FULL 2008-04 → 2026-05-11).
+Checks (period 2008-04-01 → 2026-10-31, post-tax, Sharpe over RBI repo):
+  1. v2.3 (all MacroStrategy defaults)                    → README: 17.49% / 0.87 / -12.97%
+  2. v2.2 (cash_source="repo_haircut", idle_gold_alloc=0) → README: 16.31% / 0.80 / -13.92%
+  3. Config 7 / v2.1 (v2.2 settings + basket off)         → README: 15.94% / 0.77 / -12.78%
+  4. Each step changes only what it should: Config 7 and v2.2 hold equities
+     on exactly the same days (the basket only affects flat days), and v2.2
+     and v2.3 differ only on flat days.
 
-IC2: enable_defensive_basket=True must reproduce R1 (defensive-on production)
-     (16.85% CAGR, Sharpe 0.83, MaxDD -13.92%).
-
-Both are computed via the SAME `MacroStrategy(...).run()` call, differing
-only in the enable_defensive_basket flag. No manual overlay orchestration.
+Tolerance: 0.05pp CAGR, 0.01 Sharpe, 0.1pp max drawdown — Yahoo Finance
+occasionally revises past prices, which can move results by a few hundredths.
 """
 from __future__ import annotations
 
@@ -27,103 +30,57 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "experiments", "stock_momentum"))
 import defensive_sleeve_v6 as v6      # provides load_all_data
 import strategy as prod
 
-END_FULL  = pd.Timestamp('2026-05-11')
-OOS_START = pd.Timestamp('2017-01-01')
+START, END = '2008-04-01', '2026-10-31'
+
+TARGETS = {
+    'v2.3 (production)': ({}, 17.49, 0.87, -12.97),
+    'v2.2': ({'cash_source': 'repo_haircut', 'idle_gold_alloc': 0}, 16.31, 0.80, -13.92),
+    'Config 7 (v2.1)': ({'cash_source': 'repo_haircut', 'idle_gold_alloc': 0,
+                         'enable_defensive_basket': False}, 15.94, 0.77, -12.78),
+}
 
 
-def run_cfg7(raw, enable_defensive_basket: bool):
-    combiner = prod.make_combiner(
-        rotate_stress=True, rotate_panic=False, use_momentum_gold=True,
-        slow_stress_lock_days=5, panic_short_dd_threshold=0.15)
+def run(raw, **kw):
+    combiner = prod.make_combiner(rotate_stress=True, rotate_panic=False, use_momentum_gold=True,
+                                  slow_stress_lock_days=5, panic_short_dd_threshold=0.15)
     strat = prod.MacroStrategy(combiner, nifty_cost_bps=3, gold_cost_bps=5,
-                                     long_target="NIFTYMOM30", long_cost_bps=6,
-                                     enable_v2=True, v2_dd_threshold=0.15, v2_days=60,
-                                     enable_defensive_basket=enable_defensive_basket)
-    return strat.run(raw).loc['2008-04-01':'2026-06-15']
+                               long_target="NIFTYMOM30", long_cost_bps=6,
+                               enable_v2=True, v2_dd_threshold=0.15, v2_days=60, **kw)
+    return strat.run(raw).loc[START:END]
 
 
-def perf_rf(r, daily_rf):
-    r = pd.Series(r).dropna()
-    if r.empty: return {'CAGR': np.nan, 'Sharpe': np.nan, 'MaxDD': np.nan, 'AnnVol': np.nan}
-    daily_rf = daily_rf.reindex(r.index).fillna(0)
-    excess = r - daily_rf
+def perf(r):
+    rf = prod.build_rbi_repo_rate_series(r.index) / 252
     cum = (1 + r).cumprod()
-    days = len(r); years = days / 252
-    ann_vol = r.std() * np.sqrt(252)
-    return {'CAGR':   cum.iloc[-1] ** (1/years) - 1 if years > 0 else np.nan,
-              'Sharpe': (excess.mean() * 252) / ann_vol if ann_vol > 0 else np.nan,
-              'MaxDD':  (cum / cum.cummax() - 1).min(),
-              'AnnVol': ann_vol}
+    vol = r.std() * np.sqrt(252)
+    return ((cum.iloc[-1] ** (252 / len(r)) - 1) * 100,
+            ((r - rf).mean() * 252) / vol,
+            (cum / cum.cummax() - 1).min() * 100)
 
 
 def main():
-    print("=" * 78)
-    print("PHASE 1 IDENTITY CHECK — strategy.py refactor (defensive basket wired in)")
-    print("=" * 78)
+    raw, *_ = v6.load_all_data(end_fetch="2026-11-01")
+    results, ok = {}, True
+    print(f"Period {START} → {END}, post-tax\n")
+    for name, (kw, t_cagr, t_sh, t_dd) in TARGETS.items():
+        res = run(raw, **kw); results[name] = res
+        cagr, sh, dd = perf(res['strategy_return'])
+        good = abs(cagr - t_cagr) <= 0.05 and abs(sh - t_sh) <= 0.01 and abs(dd - t_dd) <= 0.1
+        ok &= good
+        print(f"  {name:20s} CAGR {cagr:6.2f}% (README {t_cagr:.2f})  Sharpe {sh:.2f} ({t_sh:.2f})  "
+              f"MaxDD {dd:6.2f}% ({t_dd:.2f})   {'PASS' if good else 'FAIL'}")
 
-    print("\n[Loading data]", flush=True)
-    raw, _, _, _, _ = v6.load_all_data()
-    repo = prod.build_rbi_repo_rate_series(pd.date_range('2008-04-01', '2026-05-11', freq='B'))
-    daily_rf = (repo / 252)
-
-    # -------------------- IC1 -------------------------------
-    print("\n[IC1] MacroStrategy(..., enable_defensive_basket=False)", flush=True)
-    cfg7_off = run_cfg7(raw, enable_defensive_basket=False)
-    ic1_full = perf_rf(cfg7_off.loc['2008-04-01':END_FULL]['strategy_return'],
-                          daily_rf.reindex(cfg7_off.index).fillna(0))
-    ic1_oos  = perf_rf(cfg7_off.loc[OOS_START:END_FULL]['strategy_return'],
-                          daily_rf.reindex(cfg7_off.index).fillna(0))
-    print(f"  FULL: CAGR {ic1_full['CAGR']*100:.4f}%  Sharpe {ic1_full['Sharpe']:.4f}  "
-          f"MaxDD {ic1_full['MaxDD']*100:.4f}%  AnnVol {ic1_full['AnnVol']*100:.2f}%")
-    print(f"  OOS:  CAGR {ic1_oos['CAGR']*100:.4f}%  Sharpe {ic1_oos['Sharpe']:.4f}  "
-          f"MaxDD {ic1_oos['MaxDD']*100:.4f}%")
-    print(f"  TARGET: 16.5222% / 0.8078 / -12.7824% (FULL);  15.9521% / 0.7877 / -12.7824% (OOS)")
-    ic1_ok = abs(ic1_full['CAGR'] - 0.165222) < 1e-4
-
-    # -------------------- IC2 -------------------------------
-    print("\n[IC2] MacroStrategy(..., enable_defensive_basket=True)  ← DEFAULT", flush=True)
-    cfg7_on = run_cfg7(raw, enable_defensive_basket=True)
-    ic2_full = perf_rf(cfg7_on.loc['2008-04-01':END_FULL]['strategy_return'],
-                          daily_rf.reindex(cfg7_on.index).fillna(0))
-    ic2_oos  = perf_rf(cfg7_on.loc[OOS_START:END_FULL]['strategy_return'],
-                          daily_rf.reindex(cfg7_on.index).fillna(0))
-    print(f"  FULL: CAGR {ic2_full['CAGR']*100:.4f}%  Sharpe {ic2_full['Sharpe']:.4f}  "
-          f"MaxDD {ic2_full['MaxDD']*100:.4f}%  AnnVol {ic2_full['AnnVol']*100:.2f}%")
-    print(f"  OOS:  CAGR {ic2_oos['CAGR']*100:.4f}%  Sharpe {ic2_oos['Sharpe']:.4f}  "
-          f"MaxDD {ic2_oos['MaxDD']*100:.4f}%")
-    print(f"  TARGET: 16.8548% / 0.8276 / -13.9163% (FULL);  16.1021% / 0.7949 / -10.8842% (OOS)")
-    ic2_ok = abs(ic2_full['CAGR'] - 0.168548) < 1e-3     # 1e-3 = 10 bps tolerance
-
-    # Defensive-basket-active column check
-    if 'defensive_basket_active' in cfg7_on.columns:
-        n_active = int(cfg7_on['defensive_basket_active'].sum())
-        print(f"  defensive_basket_active column present: {n_active} active days")
-
-    # -------------------- SUMMARY ----------------------------
-    print("\n" + "=" * 78)
-    print("VERDICT")
-    print("=" * 78)
-    print(f"  IC1 (defensive OFF = Config 7 baseline):  "
-          f"CAGR {ic1_full['CAGR']*100:.4f}% vs target 16.5222%  Δ {(ic1_full['CAGR']-0.165222)*100:+.6f}pp  "
-          f"{'✓ PASS' if ic1_ok else '⚠ FAIL'}")
-    print(f"  IC2 (defensive ON  = R1 production):      "
-          f"CAGR {ic2_full['CAGR']*100:.4f}% vs target 16.8548%  Δ {(ic2_full['CAGR']-0.168548)*100:+.6f}pp  "
-          f"{'✓ PASS' if ic2_ok else '⚠ FAIL'}")
-
-    # Delta
-    print(f"\n  Defensive basket delta (this refactor):")
-    print(f"    FULL: ΔCAGR {(ic2_full['CAGR']-ic1_full['CAGR'])*100:+.4f}pp  "
-          f"ΔSharpe {ic2_full['Sharpe']-ic1_full['Sharpe']:+.4f}  "
-          f"ΔMaxDD {(ic2_full['MaxDD']-ic1_full['MaxDD'])*100:+.4f}pp")
-    print(f"    OOS:  ΔCAGR {(ic2_oos['CAGR']-ic1_oos['CAGR'])*100:+.4f}pp  "
-          f"ΔSharpe {ic2_oos['Sharpe']-ic1_oos['Sharpe']:+.4f}  "
-          f"ΔMaxDD {(ic2_oos['MaxDD']-ic1_oos['MaxDD'])*100:+.4f}pp")
-
-    if ic1_ok and ic2_ok:
-        print("\n✓ BOTH IC PASS — strategy.py refactor is byte-clean. Ready for Phase 2.")
-    else:
-        print("\n⚠ IC failure — investigate before proceeding.")
+    c7, v22, v23 = results['Config 7 (v2.1)'], results['v2.2'], results['v2.3 (production)']
+    same_days = (c7['nifty_position'] == v22['nifty_position']).all() and (v22['nifty_position'] == v23['nifty_position']).all()
+    flat = v22['nifty_position'] == 0
+    diff = (v22['strategy_return'] - v23['strategy_return']).abs() > 1e-12
+    only_flat = not (diff & ~flat & ~flat.shift(1, fill_value=False)).any()
+    print(f"\n  Same equity positions in Config 7, v2.2 and v2.3: {'PASS' if same_days else 'FAIL'}")
+    print(f"  v2.3 differs from v2.2 only on flat days:          {'PASS' if only_flat else 'FAIL'}")
+    ok &= same_days and only_flat
+    print("\nALL CHECKS PASS" if ok else "\nSOME CHECKS FAILED")
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -44,11 +44,12 @@ STCG_CHANGE_DATE = pd.Timestamp('2024-07-23')
 BASKET_COST_BPS_PER_SIDE = 30  # 15 brokerage/STT + 15 slippage
 
 
-def load_all_data():
-    """Fetch the same raw data as prod.strategy uses + our stock prices + universe."""
+def load_all_data(end_fetch="2026-06-15"):
+    """Fetch the same raw data as prod.strategy uses + our stock prices + universe.
+    end_fetch is exclusive (yfinance convention); default kept for reproducibility."""
     print("Loading raw price data (yfinance + local CSVs)...", flush=True)
     WARMUP = "2006-01-01"
-    END_FETCH = "2026-06-15"
+    END_FETCH = end_fetch
     TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
     raw = yf.download(TICKERS, start=WARMUP, end=END_FETCH,
                         auto_adjust=True, progress=False)["Close"]

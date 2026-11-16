@@ -42,13 +42,15 @@ HOLDINGS_OUT = os.path.join(REPO_ROOT, "data", "defensive_basket_holdings.parque
 RETURNS_OUT  = os.path.join(REPO_ROOT, "data", "defensive_basket_daily_returns.parquet")
 
 
-def main():
+def main(end_fetch="2026-06-15"):
+    """end_fetch: exclusive end date for market data (e.g. "2026-11-14").
+    Usage: python build_defensive_basket.py [END_DATE]"""
     print("=" * 78)
-    print("Rebuilding defensive basket artifacts from source data")
+    print(f"Rebuilding defensive basket artifacts from source data (data end, exclusive: {end_fetch})")
     print("=" * 78)
 
     print("\n[Loading raw + panel data]", flush=True)
-    raw, prices, quality, fund_wide, scored = v6.load_all_data()
+    raw, prices, quality, fund_wide, scored = v6.load_all_data(end_fetch=end_fetch)
     print(f"  Data spans: {raw.index.min().date()} → {raw.index.max().date()}")
     print(f"  Stock prices panel: {prices['symbol'].nunique()} symbols")
     print(f"  Quality scores: {quality['rebalance_date'].nunique()} rebalance dates")
@@ -63,7 +65,7 @@ def main():
                                      long_target="NIFTYMOM30", long_cost_bps=6,
                                      enable_v2=True, v2_dd_threshold=0.15, v2_days=60,
                                      enable_defensive_basket=False)
-    cfg7 = strat.run(raw).loc['2008-04-01':'2026-06-15']
+    cfg7 = strat.run(raw).loc['2008-04-01':end_fetch]
     print(f"  Config 7 trading days: {len(cfg7)}  ({cfg7.index.min().date()} → {cfg7.index.max().date()})")
 
     print("\n[Computing defensive basket holdings per rebalance date]", flush=True)
@@ -90,7 +92,21 @@ def main():
     holdings_df.to_parquet(HOLDINGS_OUT, index=False)
     print(f"\n  Wrote holdings ({len(holdings_df)} rows) → {HOLDINGS_OUT}")
 
-    daily_ret_df = pd.DataFrame({'ret': daily_ret})
+    # basket_available: True on days the basket actually held priced stocks.
+    # Same period convention as compute_daily_basket_returns: (rebalance, next rebalance].
+    # Days before the first rebalance, or after a rebalance that left the basket
+    # empty, are False — the overlay keeps that money in cash instead.
+    priced = set(prices['symbol'].unique())
+    idx = daily_ret.index
+    available = pd.Series(False, index=idx)
+    rds = [pd.Timestamp(r) for r in rebalance_dates]
+    for i, rd in enumerate(rds):
+        end = rds[i + 1] if i + 1 < len(rds) else idx[-1]
+        if any(s in priced for s in holdings.get(rebalance_dates[i], [])):
+            available[(idx > rd) & (idx <= end)] = True
+    empty = [r.date() for i, r in enumerate(rds) if not any(s in priced for s in holdings.get(rebalance_dates[i], []))]
+    print(f"  Rebalances with an empty basket: {empty}")
+    daily_ret_df = pd.DataFrame({'ret': daily_ret, 'basket_available': available})
     daily_ret_df.index.name = 'date'
     daily_ret_df.to_parquet(RETURNS_OUT)
     print(f"  Wrote daily returns ({len(daily_ret_df)} rows) → {RETURNS_OUT}")
@@ -99,4 +115,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main(*sys.argv[1:2])

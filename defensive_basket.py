@@ -77,7 +77,8 @@ class DefensiveBasketOverlay:
                  stcg_rate_pre: float = 0.15,
                  stcg_rate_post: float = 0.20,
                  stcg_change_date: pd.Timestamp = pd.Timestamp('2024-07-23'),
-                 daily_returns: pd.Series | None = None):
+                 daily_returns: pd.Series | None = None,
+                 basket_available: pd.Series | None = None):
         self.persistence_days = persistence_days
         self.alloc = alloc
         self.cost_per_side = cost_bps_per_side / 10_000.0
@@ -85,24 +86,45 @@ class DefensiveBasketOverlay:
         self.stcg_rate_post = stcg_rate_post
         self.stcg_change_date = stcg_change_date
         self._daily_returns = daily_returns
+        # True on days the basket actually held stocks. When a rebalance leaves
+        # the basket empty, the overlay must not deploy (money stays in cash).
+        # None = no information → treat every day as available.
+        self._basket_available = basket_available
         self._holdings = None
+
+    def _load_artifact(self):
+        if not os.path.exists(DAILY_RETURNS_PATH):
+            raise FileNotFoundError(
+                f"Defensive basket daily returns not found at {DAILY_RETURNS_PATH}. "
+                f"Run `python build_defensive_basket.py` to generate, or set "
+                f"enable_defensive_basket=False in MacroStrategy.")
+        df = pd.read_parquet(DAILY_RETURNS_PATH)
+        df.index = pd.to_datetime(df.index)
+        self._daily_returns = df['ret'] if 'ret' in df.columns else df.iloc[:, 0]
+        if self._basket_available is None and 'basket_available' in df.columns:
+            self._basket_available = df['basket_available'].astype(bool)
 
     @property
     def daily_returns(self) -> pd.Series:
         if self._daily_returns is None:
-            if not os.path.exists(DAILY_RETURNS_PATH):
-                raise FileNotFoundError(
-                    f"Defensive basket daily returns not found at {DAILY_RETURNS_PATH}. "
-                    f"Run `python build_defensive_basket.py` to generate, or set "
-                    f"enable_defensive_basket=False in MacroStrategy.")
-            df = pd.read_parquet(DAILY_RETURNS_PATH)
-            # Expected columns: date-index and one 'ret' column
-            if 'ret' in df.columns:
-                self._daily_returns = df['ret']
-            else:
-                self._daily_returns = df.iloc[:, 0]
-            self._daily_returns.index = pd.to_datetime(self._daily_returns.index)
+            self._load_artifact()
         return self._daily_returns
+
+    @property
+    def basket_available(self):
+        if self._daily_returns is None:
+            self._load_artifact()
+        return self._basket_available
+
+    def active_mask(self, nifty_position: pd.Series) -> np.ndarray:
+        """Days the basket is deployed: flat, past the persistence gate, and the
+        basket actually holds stocks (days with no availability data → not deployed)."""
+        _, day_in_latch, is_flat = self._identify_latches(nifty_position)
+        active = is_flat & (day_in_latch > self.persistence_days)
+        avail = self.basket_available
+        if avail is not None:
+            active = active & avail.reindex(nifty_position.index).fillna(False).astype(bool).values
+        return active
 
     @property
     def holdings(self) -> pd.DataFrame:
@@ -142,11 +164,10 @@ class DefensiveBasketOverlay:
         if not strategy_return.index.equals(nifty_position.index):
             raise ValueError("strategy_return and nifty_position must share the same index")
 
-        latch_id, day_in_latch, is_flat = self._identify_latches(nifty_position)
         basket = self.daily_returns.reindex(strategy_return.index).fillna(0).values
         ret = strategy_return.values.copy()
 
-        active = is_flat & (day_in_latch > self.persistence_days)
+        active = self.active_mask(nifty_position)
         # Blend: on active days, alloc*basket + (1-alloc)*cfg7_flat_return
         ret[active] = self.alloc * basket[active] + (1 - self.alloc) * strategy_return.values[active]
 

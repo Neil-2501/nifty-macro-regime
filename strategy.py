@@ -1,8 +1,8 @@
 """
-Modular Macro Strategy Framework — Indian Markets (canonical, v2.2)
+Modular Macro Strategy Framework — Indian Markets (canonical, v2.3)
 
 Production config: Config 7 (v2.1 core) + defensive quality basket overlay
-(v2.2 addition, ON BY DEFAULT). Composition:
+(v2.2) + real liquid-fund cash and idle gold (v2.3), all ON BY DEFAULT:
   - Bull long-side asset: NIFTYMOM30 index
   - Post-bear NIFTY 50 recovery window (V2 overlay)
   - 5-day slow-stress cooldown
@@ -10,6 +10,20 @@ Production config: Config 7 (v2.1 core) + defensive quality basket overlay
   - Defensive quality basket on stress-flat days after 40-day persistence gate
     (50% basket + 50% cash blend, 30 bps/side, STCG 15%/20%). REPLACES the
     Config 7 G10 gold rotation on stress-flat days (see "superseded" note below).
+  - v2.3: idle cash earns real liquid-fund NAV returns (data/liquid_fund_navs.parquet;
+    falls back to repo-100bps outside NAV coverage) — cash_source="liquid_fund".
+  - v2.3: on flat days, 25% of idle cash is held in GOLDBEES while gold closes
+    above its 200-day average (5 bps per change) — idle_gold_alloc=0.25,
+    idle_gold_ma=200. A yearly 2013-2026 walk-forward chose the 200-day filter
+    every year; 25% (vs the walk-forward's usual 50%) is the lower-drawdown
+    choice with the same Sharpe. Fixed, not re-tuned.
+  To reproduce v2.2 exactly: cash_source="repo_haircut", idle_gold_alloc=0.
+
+v2.3 numbers (post-tax, 2008-04-01 → 2026-10-31, rf-adjusted Sharpe; defensive
+basket includes the 2026-06-30 rebalance):
+  v2.3 production:   17.49% CAGR / Sharpe 0.87 / MaxDD -12.97%  (OOS 2017+: 16.11% / 0.80 / -11.28%)
+  v2.2 (for ref):    16.31% CAGR / Sharpe 0.80 / MaxDD -13.92%  (OOS 2017+: 14.99% / 0.73 / -10.88%)
+  Same window as the v2.2 numbers below (→ 2026-05-11): v2.3 18.27% / 0.91 / -12.97%.
 
 Superseded (kept as opt-in research code):
   - v2.1 G10 momentum-gated gold rotation on stress-flat days. Replaced in v2.2
@@ -100,6 +114,7 @@ v1.1.1 (Config 2, full repo) preserved at commit 078878a.
 v1.5 (Mom30 + gold-in-bull fix) preserved at commit 4e0fefe.
 """
 
+import os
 import sys
 import pandas as pd
 import numpy as np
@@ -812,6 +827,30 @@ RBI_REPO_RATE_HISTORY = [
 ]
 
 
+LIQUID_FUND_NAVS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "data", "liquid_fund_navs.parquet")
+
+
+def liquid_fund_daily_returns(target_index: pd.DatetimeIndex, fallback: pd.Series) -> pd.Series:
+    """Daily idle-cash return from real liquid-fund NAVs (average of the funds in
+    data/liquid_fund_navs.parquet). Single-day moves above 5% are unit/face-value
+    changes, not returns, and are set to 0. Dates outside NAV coverage use
+    `fallback` (repo minus haircut). Missing file → raises, so production never
+    silently changes its cash model."""
+    navs = pd.read_parquet(LIQUID_FUND_NAVS_PATH)
+    navs.index = pd.to_datetime(navs.index)
+    rets = []
+    for col in navs.columns:
+        s = navs[col].dropna()
+        r = (s.reindex(target_index.union(s.index)).sort_index().ffill()
+              .reindex(target_index).pct_change())
+        r = r.where(r.abs() <= 0.05, 0.0)
+        covered = (target_index >= s.index.min()) & (target_index <= s.index.max())
+        rets.append(r.where(covered))
+    out = pd.concat(rets, axis=1).mean(axis=1, skipna=True)
+    return out.fillna(fallback).rename("cash_yield")
+
+
 def build_rbi_repo_rate_series(target_index: pd.DatetimeIndex) -> pd.Series:
     """
     Returns a Series indexed by target_index with the active RBI repo rate (as
@@ -856,7 +895,10 @@ class MacroStrategy:
                  composition_recovery_lookback=60,
                  composition_betas_csv=None,
                  enable_defensive_basket=True,
-                 defensive_basket_overlay=None):
+                 defensive_basket_overlay=None,
+                 cash_source="liquid_fund",
+                 idle_gold_alloc=0.25,
+                 idle_gold_ma=200):
         self.combiner = combiner
         self.target = target          # ^NSEI — used for signals, regime filter, SHORT positions
         self.gold_target = gold_target
@@ -909,6 +951,17 @@ class MacroStrategy:
         # Overlay is post-processing on strategy_return (see defensive_basket.py).
         self.enable_defensive_basket = enable_defensive_basket
         self._defensive_basket_overlay = defensive_basket_overlay
+        # v2.3: idle-cash return source. "liquid_fund" uses real liquid-fund NAVs
+        # (data/liquid_fund_navs.parquet), falling back to repo minus haircut on
+        # dates the file does not cover. "repo_haircut" is the v2.2 model.
+        if cash_source not in ("liquid_fund", "repo_haircut"):
+            raise ValueError(f"cash_source must be 'liquid_fund' or 'repo_haircut', got {cash_source!r}")
+        self.cash_source = cash_source
+        # v2.3: on fully-flat days, hold `idle_gold_alloc` of the idle cash in
+        # gold_target while gold closes above its `idle_gold_ma`-day average.
+        # Independent of the G10 gold rotation. Set idle_gold_alloc=0 to disable.
+        self.idle_gold_alloc = idle_gold_alloc
+        self.idle_gold_ma = idle_gold_ma
 
     def _compute_v2_active(self, data):
         """V2 overlay: returns Series of bool — True on days within an active
@@ -1027,13 +1080,27 @@ class MacroStrategy:
             repo_rate = build_rbi_repo_rate_series(data.index)
             haircut_repo = (repo_rate - self.cash_yield_haircut_bps / 10000).clip(lower=0)
             daily_cash_yield = haircut_repo / 252
-            cash_pnl = cash_position.shift(1) * daily_cash_yield
+            if self.cash_source == "liquid_fund":
+                daily_cash_yield = liquid_fund_daily_returns(data.index, fallback=daily_cash_yield)
         else:
-            cash_pnl = pd.Series(0.0, index=data.index)
+            daily_cash_yield = pd.Series(0.0, index=data.index)
+
+        # v2.3 idle gold: fraction of idle cash held in gold while gold > its MA.
+        # Decided at day-T close, earns day T+1 (same timing as all positions).
+        idle_gold_frac = pd.Series(0.0, index=data.index)
+        if self.idle_gold_alloc > 0 and self.gold_target in data.columns:
+            gold_px = data[self.gold_target].ffill()
+            gold_up = (gold_px > gold_px.rolling(self.idle_gold_ma).mean()) & gold_px.notna()
+            idle_gold_frac = self.idle_gold_alloc * gold_up.astype(float)
+        held_frac = idle_gold_frac.shift(1).fillna(0.0)
+        idle_return = held_frac * gold_returns + (1.0 - held_frac) * daily_cash_yield
+        cash_pnl = cash_position.shift(1) * idle_return
+        idle_gold_weight = cash_position * idle_gold_frac
+        idle_gold_cost = idle_gold_weight.diff().abs().fillna(0.0) * (self.gold_cost_bps / 10000)
         # Cost to enter/exit cash sweep (default 0 — institutional auto-sweep is free)
         cash_cost = cash_position.diff().abs() * (self.cash_cost_bps / 10000)
 
-        strategy_returns_pretax = (nifty_pnl + gold_pnl + cash_pnl - cash_cost).rename("strategy_return_pretax")
+        strategy_returns_pretax = (nifty_pnl + gold_pnl + cash_pnl - cash_cost - idle_gold_cost).rename("strategy_return_pretax")
         if self.apply_tax:
             strategy_returns = apply_annual_tax(
                 strategy_returns_pretax.fillna(0.0), tax_rate=self.tax_rate
@@ -1052,9 +1119,8 @@ class MacroStrategy:
                 self._defensive_basket_overlay = overlay
             strategy_returns_overlaid = overlay.apply(strategy_returns, nifty_pos)
             # Track which days the overlay was active (for diagnostics)
-            _, day_in_latch, is_flat = overlay._identify_latches(nifty_pos)
             defensive_basket_active = pd.Series(
-                is_flat & (day_in_latch > overlay.persistence_days),
+                overlay.active_mask(nifty_pos),
                 index=data.index, name="defensive_basket_active")
             strategy_returns = strategy_returns_overlaid.rename("strategy_return")
 
@@ -1067,6 +1133,7 @@ class MacroStrategy:
             "long_mom_default":        long_mom_default,
             "composition_swap_active": composition_swap_active,
             "defensive_basket_active": defensive_basket_active,
+            "idle_gold_weight":        idle_gold_weight,
             "strategy_return":         strategy_returns,
             "strategy_return_pretax":  strategy_returns_pretax,
         })
@@ -1094,15 +1161,22 @@ def load_nse_index_csv(path, col_name):
     return df["CLOSE_INDEX_VAL"].astype(float).rename(col_name)
 
 
-def metrics(ret_series):
+def metrics(ret_series, rf_daily=None):
+    """rf_daily: optional daily risk-free series (e.g. RBI repo / 252). When given,
+    Sharpe = mean(r - rf) * 252 / (std(r) * sqrt(252)) — the README convention.
+    When omitted, the legacy fixed RF (6%) formula is used."""
     r = ret_series.dropna()
     cum = (1 + r).cumprod()
     n_years = len(r) / 252
     total = cum.iloc[-1] - 1
     cagr = (1 + total) ** (1 / n_years) - 1
     vol = r.std() * np.sqrt(252)
-    excess = r - RF / 252
-    sharpe = (excess.mean() / excess.std()) * np.sqrt(252)
+    if rf_daily is not None:
+        excess = r - rf_daily.reindex(r.index).fillna(0.0)
+        sharpe = excess.mean() * 252 / vol
+    else:
+        excess = r - RF / 252
+        sharpe = (excess.mean() / excess.std()) * np.sqrt(252)
     downside = r[r < 0].std() * np.sqrt(252)
     sortino = (cagr - RF) / downside if downside > 0 else np.nan
     dd = ((cum - cum.cummax()) / cum.cummax()).min()
@@ -1214,12 +1288,12 @@ def make_combiner(rotate_stress=False, rotate_panic=False, use_momentum_gold=Fal
 def main():
     WARMUP = "2006-01-01"
     START  = "2008-04-01"
-    END    = "2025-12-31"
+    END    = "2026-10-31"
     # v1.4: ^TNX (US 10Y yield) added — required by G10 gold gate
     TICKERS = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
 
     print("Downloading data ...", file=sys.stderr)
-    raw = yf.download(TICKERS, start=WARMUP, end="2026-05-12",
+    raw = yf.download(TICKERS, start=WARMUP, end="2026-11-01",
                       auto_adjust=True, progress=False)["Close"]
     raw.dropna(how="all", inplace=True)
     # NOTE: do NOT ffill GOLDBEES.NS pre-2010 (no data → gold position must stay flat)
@@ -1259,27 +1333,33 @@ def main():
     # v1.3: configs list with optional MacroStrategy kwargs as 3rd tuple element.
     # Configs 1-4 use defaults (long_target="^NSEI", long_cost_bps=3) — backward compatible.
     # Configs 5-6 substitute the long-side asset to capture higher-alpha bull-regime exposure.
+    # Configs 1-7 are historical definitions: run them with the v2.2/v2.3 layers
+    # switched off so each label reproduces what it originally meant.
+    legacy = {"enable_defensive_basket": False, "cash_source": "repo_haircut", "idle_gold_alloc": 0}
+    cfg7_kwargs = {"long_target": "NIFTYMOM30", "long_cost_bps": 6,
+                   "enable_v2": True, "v2_dd_threshold": 0.15, "v2_days": 60}
+    cfg7_combiner = lambda: make_combiner(True, False, use_momentum_gold=True,
+                                          slow_stress_lock_days=5, panic_short_dd_threshold=0.15)
     configs = [
-        ("Config 1 (no gold)",                make_combiner(False, False),                          {}),
-        ("Config 2 (gold flat)",              make_combiner(True,  False),                          {}),
-        ("Config 3 (gold all)",               make_combiner(True,  True),                           {}),
-        ("Config 4 (gold momentum)",          make_combiner(True,  False, use_momentum_gold=True),  {}),
+        ("Config 1 (no gold)",                make_combiner(False, False),                          dict(legacy)),
+        ("Config 2 (gold flat)",              make_combiner(True,  False),                          dict(legacy)),
+        ("Config 3 (gold all)",               make_combiner(True,  True),                           dict(legacy)),
+        ("Config 4 (gold momentum)",          make_combiner(True,  False, use_momentum_gold=True),  dict(legacy)),
         ("Config 5 (v1.3 Midcap 150)",        make_combiner(True,  False, use_momentum_gold=True),
-            {"long_target": "NIFTYMIDCAP150", "long_cost_bps": 6}),
+            {"long_target": "NIFTYMIDCAP150", "long_cost_bps": 6, **legacy}),
         ("Config 6 (v1.5 Momentum 30)",       make_combiner(True,  False, use_momentum_gold=True),
-            {"long_target": "NIFTYMOM30",     "long_cost_bps": 6}),
-        # v2.1 production: Config 6 + V2 overlay + 5-day slow-stress lock +
-        #                  15% DD gate on panic-short
-        ("Config 7 (v2.1 PROD: Mom30+V2+L5+DD15)",
-            make_combiner(True, False, use_momentum_gold=True,
-                          slow_stress_lock_days=5,
-                          panic_short_dd_threshold=0.15),
-            {"long_target": "NIFTYMOM30",     "long_cost_bps": 6,
-             "enable_v2": True, "v2_dd_threshold": 0.15, "v2_days": 60}),
+            {"long_target": "NIFTYMOM30",     "long_cost_bps": 6, **legacy}),
+        # v2.1: Config 6 + V2 overlay + 5-day slow-stress lock + 15% DD gate on panic-short
+        ("Config 7 (v2.1: Mom30+V2+L5+DD15)", cfg7_combiner(), {**cfg7_kwargs, **legacy}),
+        # v2.2: Config 7 + defensive quality basket (replaces gold rotation)
+        ("v2.2 (Config 7 + defensive basket)", cfg7_combiner(),
+            {**cfg7_kwargs, "cash_source": "repo_haircut", "idle_gold_alloc": 0}),
+        # v2.3 PRODUCTION: v2.2 + liquid-fund cash + 25% idle gold (all defaults)
+        ("v2.3 PRODUCTION",                   cfg7_combiner(), dict(cfg7_kwargs)),
         # NOTE: the composition swap overlay (CompositionSwapOverlay class)
         # is implemented and available via enable_composition_swap=True, but
-        # no Config 8 is wired up because it does not beat Config 7 on the
-        # corrected NIFTY Midcap 150 data. Retain for future testing only.
+        # is not wired into any config: it did not beat Config 7 on the
+        # corrected NIFTY Midcap 150 data. Retained for future testing only.
     ]
 
     runs = []
@@ -1287,6 +1367,7 @@ def main():
         s = MacroStrategy(combiner, nifty_cost_bps=3, gold_cost_bps=5, **kwargs)
         r = s.run(raw).loc[START:END].copy()
         runs.append((label, r))
+    repo_rf = build_rbi_repo_rate_series(raw.index) / 252
 
     # ── Verification checks ───────────────────────────────────────────────
     print("\nVERIFICATION CHECKS")
@@ -1309,14 +1390,14 @@ def main():
     print(f"  Long-day counts match across Cfg 4/5/6: {match}")
 
     # ── Comparison Table ──────────────────────────────────────────────────
-    print(f"\n\nCONFIGURATION COMPARISON — 2008-2025, base costs (NIFTY 3 bps, gold 5 bps, "
-          f"Midcap/Mom30 6 bps)")
+    print(f"\n\nCONFIGURATION COMPARISON — {START} to {END}, post-tax, base costs (NIFTY 3 bps, "
+          f"gold 5 bps, Midcap/Mom30 6 bps). Sharpe = excess return over RBI repo rate.")
     print("=" * 130)
-    m = [metrics(r["strategy_return"]) for _, r in runs]
+    m = [metrics(r["strategy_return"], rf_daily=repo_rf) for _, r in runs]
     bds = [position_breakdown(r) for _, r in runs]
 
     nifty_only = runs[0][1]["nifty_return"]
-    m_nifty = metrics(nifty_only)
+    m_nifty = metrics(nifty_only, rf_daily=repo_rf)
 
     n = len(runs)
     rows = [
@@ -1332,9 +1413,9 @@ def main():
         ("Days long gold",      [f"{b['long_gold']:>8d}"    for b in bds]),
         ("Days flat",           [f"{b['flat']:>8d}"         for b in bds]),
     ]
-    headers = ["Cfg1", "Cfg2", "Cfg3", "Cfg4", "Cfg5", "Cfg6", "Cfg7"][:n]
+    headers = ["Cfg1", "Cfg2", "Cfg3", "Cfg4", "Cfg5", "Cfg6", "Cfg7", "v2.2", "v2.3"][:n]
     subs    = ["(no gold)", "(gold flat)", "(gold all)", "(momentum)",
-               "(Midcap150)", "(Mom30)", "(v2.0)"][:n]
+               "(Midcap150)", "(Mom30)", "(v2.1)", "(+basket)", "(PROD)"][:n]
     hdr = f"  {'Metric':<20}" + "".join(f" | {h:>10}" for h in headers)
     sub = f"  {'':<20}"        + "".join(f" | {s:>10}" for s in subs)
     print(hdr)
@@ -1342,7 +1423,7 @@ def main():
     print("  " + "-" * 20 + ("+" + "-" * 12) * n)
     for label, vals in rows:
         print(f"  {label:<20}" + "".join(f" | {v:>10}" for v in vals))
-    print(f"\n  (Reference) NIFTY B&H Sharpe={m_nifty['sharpe']:.2f}, "
+    print(f"\n  (Reference, pre-tax) NIFTY B&H Sharpe={m_nifty['sharpe']:.2f}, "
           f"CAGR={m_nifty['cagr']*100:.2f}%, MaxDD={m_nifty['max_dd']*100:.1f}%")
 
     # ── Year-by-year ──────────────────────────────────────────────────────

@@ -1,10 +1,11 @@
 """
 make_plots.py — generate publication-quality plots for the README.
 
-Runs the production v2.1 Config 7 strategy: NIFTY 200 Momentum 30 long-side +
-post-bear NIFTY recovery overlay + slow-stress cooldown + panic-short drawdown
-confirmation + momentum-gated gold rotation with macro confirmation. Imports
-from strategy.py rather than duplicating logic.
+Runs the production v2.3 strategy (strategy.py defaults): NIFTY 200 Momentum 30
+in bull markets + post-bear NIFTY recovery overlay + stress signal with cooldown +
+drawdown-confirmed panic short + defensive quality basket in long flat periods +
+liquid-fund cash + 25% idle gold in gold uptrends. Imports from strategy.py rather
+than duplicating logic. Period: 2008-04-01 to 2026-10-31.
 
 Produces:
   images/equity_curve.png
@@ -36,26 +37,24 @@ from strategy import (
 
 
 # ---------------------------------------------------------------------------
-# run_backtest() — runs Config 7 production (v2.1)
+# run_backtest() — runs the production strategy (v2.3)
 # ---------------------------------------------------------------------------
 
 def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
                  use_cash_yield: bool = True,
                  cash_yield_haircut_bps: float = 100) -> dict:
     """
-    Downloads data, runs Config 7 (v2.1: Mom30 long-side with post-bear NIFTY
-    recovery overlay + slow-stress cooldown + panic-short drawdown confirmation
-    + momentum-gated gold rotation with macro confirmation + repo-haircut cash),
+    Downloads data, runs the production strategy (v2.3, strategy.py defaults),
     returns all series needed for plots.
     """
     WARMUP   = "2006-01-01"
     START    = "2008-04-01"
-    END      = "2025-12-31"
+    END      = "2026-10-31"
     # v1.4 added ^TNX (US 10Y) for macro-confirmed gold rotation gate
     TICKERS  = ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "GOLDBEES.NS", "^TNX"]
 
     print("Downloading data ...", file=sys.stderr)
-    raw = yf.download(TICKERS, start=WARMUP, end="2026-01-01",
+    raw = yf.download(TICKERS, start=WARMUP, end="2026-11-01",
                       auto_adjust=True, progress=False)["Close"]
     raw.dropna(how="all", inplace=True)
     for col in ["CL=F", "^NSEI", "INR=X", "^INDIAVIX", "^TNX"]:
@@ -71,11 +70,8 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
     mom30 = load_nse_index_csv("data/momentum30_history.csv", "NIFTYMOM30")
     raw["NIFTYMOM30"] = mom30.reindex(raw.index).ffill()
 
-    # Config 7 (v2.1 production):
-    #   Mom30 long-side with post-bear NIFTY recovery overlay (60d, 15% bear DD)
-    #   Slow-stress with 5-day cooldown
-    #   Panic-short with 15% drawdown confirmation
-    #   Momentum-gated gold rotation with macro confirmation (v1.5 bear-req)
+    # Production v2.3 = Config 7 signals + MacroStrategy defaults
+    # (defensive basket, liquid-fund cash, 25% idle gold).
     combiner = make_combiner(rotate_stress=True, rotate_panic=False,
                              use_momentum_gold=True,
                              slow_stress_lock_days=5,
@@ -128,8 +124,11 @@ def run_backtest(nifty_cost_bps: float = 3, gold_cost_bps: float = 5,
 
 
 def compute_full_metrics(res):
-    """Returns (strategy post-tax metrics, NIFTY post-tax metrics)."""
-    return metrics(res["strategy_return"]), metrics(res["nifty_posttax"])
+    """Returns (strategy post-tax metrics, NIFTY post-tax metrics).
+    Sharpe uses the RBI repo rate as the risk-free rate (README convention)."""
+    rf = build_rbi_repo_rate_series(res.index) / 252
+    return (metrics(res["strategy_return"], rf_daily=rf),
+            metrics(res["nifty_posttax"], rf_daily=rf))
 
 
 # ---------------------------------------------------------------------------
@@ -161,20 +160,20 @@ def _base_ax(ax):
 def plot_equity_curve(bt, out_path):
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
     ax.plot(bt["dates"], bt["strategy_cum"],
-            color=BLUE, linewidth=1.5, label="Strategy v2.1 (post-tax, 15% STCG)", zorder=3)
+            color=BLUE, linewidth=1.5, label="Strategy v2.3 (post-tax)", zorder=3)
     ax.plot(bt["dates"], bt["nifty_cum"],
             color=GRAY, linewidth=1.5, label="NIFTY 50 Buy & Hold (post-tax, 10% LTCG)", zorder=2)
     ax.set_yscale("log")
-    # v2.1 post-tax: strategy ends ~17x, NIFTY ~4.4x (post-tax 10% LT)
-    ax.set_yticks([0.5, 1, 2, 3, 5, 7, 10, 15, 20])
-    ax.set_yticklabels(["0.5x", "1.0x", "2.0x", "3.0x", "5.0x", "7.0x", "10.0x", "15.0x", "20.0x"])
+    # v2.3 post-tax: strategy ends ~22x, NIFTY ~3.9x (post-tax 10% LT)
+    ax.set_yticks([0.5, 1, 2, 3, 5, 7, 10, 15, 20, 30])
+    ax.set_yticklabels(["0.5x", "1.0x", "2.0x", "3.0x", "5.0x", "7.0x", "10.0x", "15.0x", "20.0x", "30.0x"])
     ax.minorticks_off()
-    ax.set_ylim(0.5, 20)
+    ax.set_ylim(0.5, 30)
     ax.set_axisbelow(True)
     ax.yaxis.grid(True, which="major", linestyle="-", linewidth=0.5, alpha=0.3)
     ax.xaxis.grid(False)
     ax.set_ylabel("Cumulative return (x)")
-    ax.set_title("Cumulative Returns (post-tax) — Strategy v2.1 vs NIFTY 50 (2008-2025)",
+    ax.set_title("Cumulative Returns (post-tax) — Strategy v2.3 vs NIFTY 50 (Apr 2008 – Oct 2026)",
                  fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
@@ -202,7 +201,7 @@ def plot_drawdown(bt, out_path):
 
     ax.fill_between(dates, sdd, 0, color=BLUE, alpha=0.35, zorder=2)
     ax.plot(dates, sdd, color=BLUE, linewidth=1.2,
-            label="Strategy v2.1", zorder=3)
+            label="Strategy v2.3", zorder=3)
 
     ax.fill_between(dates, ndd, 0, color=GRAY, alpha=0.25, zorder=1)
     ax.plot(dates, ndd, color=GRAY, linewidth=1.2,
@@ -221,7 +220,7 @@ def plot_drawdown(bt, out_path):
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
     ax.set_ylabel("Drawdown")
-    ax.set_title("Drawdown (post-tax) — Strategy v2.1 vs NIFTY 50 (2008-2025)", fontsize=11, pad=10)
+    ax.set_title("Drawdown (post-tax) — Strategy v2.3 vs NIFTY 50 (Apr 2008 – Oct 2026)", fontsize=11, pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     fig.tight_layout()
@@ -250,7 +249,7 @@ def plot_yearly_returns(bt, out_path):
     n_plot = np.where(np.abs(n_ret) < MIN_VIS, np.sign(n_ret + 1e-9) * MIN_VIS, n_ret)
 
     fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
-    ax.bar(x - width / 2, s_plot, width, label="Strategy v2.1",
+    ax.bar(x - width / 2, s_plot, width, label="Strategy v2.3",
            color=BLUE, zorder=3)
     ax.bar(x + width / 2, n_plot, width, label="NIFTY 50 Buy & Hold",
            color=GRAY, zorder=3)
@@ -260,7 +259,7 @@ def plot_yearly_returns(bt, out_path):
     ax.set_xticklabels(years, rotation=45, ha="right", fontsize=8)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax.set_ylabel("Annual return (%)")
-    ax.set_title("Annual Returns (post-tax) — Strategy v2.1 vs NIFTY 50", fontsize=11, pad=10)
+    ax.set_title("Annual Returns (post-tax) — Strategy v2.3 vs NIFTY 50 (2026 = Jan–Oct)", fontsize=11, pad=10)
     ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
     _base_ax(ax)
     ax.grid(axis="x", visible=False)
@@ -284,7 +283,7 @@ def write_summary_csv(sm, nm, csv_path):
         ("calmar",                  round(sm["calmar"],       2),  round(nm["calmar"],       2)),
         ("ann_vol_pct",             round(sm["vol"]    * 100, 2),  round(nm["vol"]    * 100, 2)),
     ]
-    df = pd.DataFrame(rows, columns=["metric", "strategy_v21", "nifty_buy_hold"])
+    df = pd.DataFrame(rows, columns=["metric", "strategy_v23", "nifty_buy_hold"])
     df.to_csv(csv_path, index=False)
     print(f"  Saved {csv_path}")
     return df
@@ -302,28 +301,25 @@ if __name__ == "__main__":
     sm, nm = compute_full_metrics(bt["res"])
     bd = position_breakdown(bt["res"])
 
-    print("\n--- Headline metrics (v2.2 R1 = Config 7 + defensive quality basket, post-tax) ---")
-    print(f"  Cumulative return : {sm['total']*100:.1f}%  (expected ~1655% through 2026-05-11)")
-    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (expected ~16.85% v2.2 R1)")
-    print(f"  Sharpe (ret/vol)  : {sm['sharpe']:.2f}    (expected ~0.84 — legacy return/vol ratio;")
-    print(f"                                             rf-adjusted canonical Sharpe = 0.83)")
+    print("\n--- Headline metrics (v2.3 production, post-tax, 2008-04-01 to 2026-10-31) ---")
+    print(f"  Cumulative return : {sm['total']*100:.1f}%  (README: ~2122%)")
+    print(f"  CAGR              : {sm['cagr']*100:.2f}%  (README: 17.49%)")
+    print(f"  Sharpe            : {sm['sharpe']:.2f}    (README: 0.87; excess return over RBI repo)")
     print(f"  Sortino           : {sm['sortino']:.2f}")
     print(f"  Calmar            : {sm['calmar']:.2f}")
-    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (expected ~-13.9% v2.2 R1)")
-    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (expected ~12.13%)")
-    print(f"  Note: Sharpe printed here is the legacy return/vol ratio (rf=0). Canonical rf-adjusted")
-    print(f"        Sharpe using RBI repo (headline 0.83) is computed elsewhere; see README.")
+    print(f"  Max drawdown      : {sm['max_dd']*100:.1f}%  (README: -12.97%)")
+    print(f"  Ann. volatility   : {sm['vol']*100:.2f}%  (README: 12.3%)")
 
     print(f"\n  Position breakdown: long_nifty={bd['long_nifty']}  "
           f"short_nifty={bd['short_nifty']}  long_gold={bd['long_gold']}  "
           f"flat={bd['flat']}  total={bd['total']}")
 
-    # Tolerance check — v2.2 R1 expected values (post-tax, endpoint 2026-05-11)
+    # Tolerance check against the README headline (small tolerance for Yahoo data revisions)
     checks = [
-        ("Cumulative return", sm["total"]*100, 1655.0, 20.0),
-        ("CAGR",              sm["cagr"]*100,   16.85, 0.1),
-        ("Sharpe (ret/vol)",  sm["sharpe"],      1.34, 0.05),
-        ("Max drawdown",      sm["max_dd"]*100, -13.92, 0.2),
+        ("Cumulative return", sm["total"]*100, 2122.0, 25.0),
+        ("CAGR",              sm["cagr"]*100,   17.49, 0.05),
+        ("Sharpe",            sm["sharpe"],      0.87, 0.01),
+        ("Max drawdown",      sm["max_dd"]*100, -12.97, 0.1),
     ]
     ok = True
     for label, got, expected, tol in checks:
