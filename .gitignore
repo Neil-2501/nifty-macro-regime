@@ -215,3 +215,6 @@ _yf_cache.pkl
 
 # Local API keys — never commit
 experiments/stock_momentum/config_local.py
+
+# Paper-trading run logs (local only)
+paper_trading/logs/
